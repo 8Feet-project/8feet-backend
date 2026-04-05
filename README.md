@@ -8,17 +8,23 @@
 
 ### 1. 环境要求
 - Python 3.8+
-- Docker Desktop (Windows)
-- PowerShell
+- Docker
 
 ### 2. 安装依赖
 ```bash
+conda create -n feet python==3.9
+conda activate feet
 pip install -r requirements.txt
 ```
 
 ### 3. 一键初始化
+Windows:
 ```powershell
-.\scripts\init_db.ps1
+.\scripts\init_db.ps1 # win未验证
+```
+Linux:
+```bash
+.\scripts\init_db.sh # linux已验证
 ```
 自动完成：
 - 启动 PostgreSQL 13 (端口 5432)
