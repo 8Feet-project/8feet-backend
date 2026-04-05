@@ -1,5 +1,5 @@
 # 8Feet 数据库初始化脚本 (PowerShell)
-# 版本锁定: PostgreSQL 13, Redis 6.2, Django 3.1.7
+# 版本锁定: PostgreSQL 13, Redis 6.2
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  8Feet 后端 - 数据库初始化脚本" -ForegroundColor Cyan
@@ -62,8 +62,8 @@ if (-not (Test-Path "config.yaml")) {
 # 5. 执行 Django 数据库迁移
 # ============================================================
 Write-Host "[5/5] 执行 Django 数据库迁移..." -ForegroundColor Yellow
-python manage.py makemigrations users llm_manager research reports analytics
-python manage.py migrate
+uv run python src/manage.py makemigrations users llm_manager research reports analytics
+uv run python src/manage.py migrate
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "`n========================================" -ForegroundColor Green
@@ -72,7 +72,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "  PostgreSQL: localhost:5432" -ForegroundColor Cyan
     Write-Host "  Redis:      localhost:6379" -ForegroundColor Cyan
     Write-Host "  Minio:      http://localhost:9001 (管理界面)" -ForegroundColor Cyan
-    Write-Host "`n  运行开发服务器: python manage.py runserver" -ForegroundColor Cyan
+    Write-Host "`n  运行开发服务器: uv run python src/manage.py runserver" -ForegroundColor Cyan
 } else {
     Write-Error "数据库迁移失败，请检查错误信息。"
 }

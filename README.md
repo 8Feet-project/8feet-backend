@@ -7,7 +7,6 @@
 ## 快速开始
 
 ### 1. 环境要求
-- Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
 - Docker
 
@@ -23,7 +22,7 @@ Windows:
 ```
 Linux:
 ```bash
-.\scripts\init_db.sh # linux已验证
+./scripts/init_db.sh # linux已验证
 ```
 自动完成：
 - 启动 PostgreSQL 13 (端口 5432)
