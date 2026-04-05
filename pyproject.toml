@@ -12,8 +12,6 @@ dependencies = [
     "psycopg2-binary",
     "pylint",
     "pylint-django",
-    "django-nose",
-    "coverage",
     "pillow",
     "requests",
     "pandas",

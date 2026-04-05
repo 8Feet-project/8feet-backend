@@ -8,8 +8,8 @@ import yaml
 # ============================================================
 # 配置文件加载
 # ============================================================
-# 项目根目录（src/ 的父目录）
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 项目根目录（src/ 的父目录，即项目根）
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _CONFIG_PATH = os.path.join(_PROJECT_ROOT, 'config.yaml')
 
@@ -44,7 +44,6 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # 第三方
     'corsheaders',
-    'django_nose',
     'channels',
     # 业务模块 (按依赖顺序)
     'users',
@@ -183,4 +182,4 @@ MAIL_SMTP_PORT = _YAML_CONFIG.get('SmtpPort', 465)
 # ============================================================
 # 测试运行器
 # ============================================================
-TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'
+# Note: django-nose removed due to Python 3.12 incompatibility (uses removed 'imp' module)
