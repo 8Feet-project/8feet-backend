@@ -8,3 +8,8 @@ from django.apps import AppConfig
 class UsersConfig(AppConfig):
     name = 'users'
     verbose_name = '用户与权限管理'
+
+    def ready(self):
+        # 注册信号处理器: UserProfile 保存时自动同步角色 Group
+        import users.signals  # noqa: F401
+

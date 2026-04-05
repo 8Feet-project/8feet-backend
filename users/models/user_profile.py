@@ -47,6 +47,12 @@ class UserProfile(models.Model):
         db_table = 'user_profile'
         verbose_name = '用户扩展信息'
         verbose_name_plural = verbose_name
+        permissions = [
+            ('create_user', '创建用户账户'),
+            ('update_user', '修改用户信息及角色'),
+            ('toggle_user', '启用/禁用用户账户'),
+            ('view_user', '查看用户列表'),
+        ]
 
     def __str__(self):
         return f"{self.user.username} ({self.get_role_display()})"

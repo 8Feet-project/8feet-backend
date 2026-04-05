@@ -48,6 +48,10 @@ class Report(models.Model):
         verbose_name = '调研报告'
         verbose_name_plural = verbose_name
         ordering = ['-created_at']
+        permissions = [
+            ('view_report', '查看调研报告'),
+            ('followup_report', '报告深度追问'),
+        ]
 
     def __str__(self):
         return f"{self.title} (v{self.version})"

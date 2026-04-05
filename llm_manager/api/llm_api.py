@@ -71,7 +71,7 @@ def toggle_config(request: HttpRequest):
 
 @response_wrapper
 @require_GET
-@jwt_auth()
+@jwt_auth(perms=['llm_manager.view_llmconfig'])
 def list_configs(request: HttpRequest):
     """获取模型列表
 
@@ -83,7 +83,7 @@ def list_configs(request: HttpRequest):
 
 @response_wrapper
 @require_GET
-@jwt_auth()
+@jwt_auth(perms=['llm_manager.view_llmconfig'])
 def recommended_model(request: HttpRequest):
     """获取调研对象类型的推荐模型
 

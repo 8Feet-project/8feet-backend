@@ -42,6 +42,9 @@ class OperationLog(models.Model):
         verbose_name = '操作日志'
         verbose_name_plural = verbose_name
         ordering = ['-created_at']
+        permissions = [
+            ('view_dashboard', '查看统计看板'),
+        ]
 
 
 class SystemLog(models.Model):

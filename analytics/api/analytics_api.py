@@ -17,7 +17,7 @@ from analytics.interface.analytics_interface import (
 
 @response_wrapper
 @require_GET
-@jwt_auth()
+@jwt_auth(perms=['analytics.view_dashboard'])
 def dashboard(request: HttpRequest):
     """统计看板
 
@@ -29,7 +29,7 @@ def dashboard(request: HttpRequest):
 
 @response_wrapper
 @require_POST
-@jwt_auth()
+@jwt_auth(perms=['analytics.add_favorite'])
 def favorite_add(request: HttpRequest):
     """添加收藏
 
@@ -51,7 +51,7 @@ def favorite_add(request: HttpRequest):
 
 @response_wrapper
 @require_POST
-@jwt_auth()
+@jwt_auth(perms=['analytics.remove_favorite'])
 def favorite_remove(request: HttpRequest):
     """取消收藏
 
@@ -72,7 +72,7 @@ def favorite_remove(request: HttpRequest):
 
 @response_wrapper
 @require_GET
-@jwt_auth()
+@jwt_auth(perms=['analytics.view_favorite'])
 def favorite_list(request: HttpRequest):
     """收藏列表
 
@@ -85,7 +85,7 @@ def favorite_list(request: HttpRequest):
 
 @response_wrapper
 @require_POST
-@jwt_auth()
+@jwt_auth(perms=['analytics.create_alert'])
 def alert_create(request: HttpRequest):
     """创建动态提醒
 
@@ -116,7 +116,7 @@ def alert_create(request: HttpRequest):
 
 @response_wrapper
 @require_GET
-@jwt_auth()
+@jwt_auth(perms=['analytics.view_alert'])
 def alert_list(request: HttpRequest):
     """提醒列表
 

@@ -17,7 +17,7 @@ from reports.interface.report_interface import (
 
 @response_wrapper
 @require_GET
-@jwt_auth()
+@jwt_auth(perms=['reports.view_report'])
 def report_detail(request: HttpRequest):
     """获取报告详情
 
@@ -37,7 +37,7 @@ def report_detail(request: HttpRequest):
 
 @response_wrapper
 @require_GET
-@jwt_auth()
+@jwt_auth(perms=['reports.view_report'])
 def report_list(request: HttpRequest):
     """获取用户报告列表 (历史管理)
 
@@ -50,7 +50,7 @@ def report_list(request: HttpRequest):
 
 @response_wrapper
 @require_GET
-@jwt_auth()
+@jwt_auth(perms=['reports.view_report'])
 def task_reports(request: HttpRequest):
     """获取指定任务的报告列表
 
@@ -67,7 +67,7 @@ def task_reports(request: HttpRequest):
 
 @response_wrapper
 @require_POST
-@jwt_auth()
+@jwt_auth(perms=['reports.followup_report'])
 def followup_question(request: HttpRequest):
     """报告深度追问
 

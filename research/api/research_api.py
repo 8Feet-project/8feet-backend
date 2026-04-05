@@ -17,7 +17,7 @@ from research.interface.research_interface import (
 
 @response_wrapper
 @require_POST
-@jwt_auth()
+@jwt_auth(perms=['research.create_research'])
 def create_task(request: HttpRequest):
     """发起调研任务
 
@@ -51,7 +51,7 @@ def create_task(request: HttpRequest):
 
 @response_wrapper
 @require_GET
-@jwt_auth()
+@jwt_auth(perms=['research.view_research'])
 def task_detail(request: HttpRequest):
     """获取调研任务详情
 
@@ -71,7 +71,7 @@ def task_detail(request: HttpRequest):
 
 @response_wrapper
 @require_GET
-@jwt_auth()
+@jwt_auth(perms=['research.view_research'])
 def task_list(request: HttpRequest):
     """获取当前用户的调研任务列表
 
@@ -83,7 +83,7 @@ def task_list(request: HttpRequest):
 
 @response_wrapper
 @require_POST
-@jwt_auth()
+@jwt_auth(perms=['research.cancel_research'])
 def cancel_research_task(request: HttpRequest):
     """取消调研任务
 
@@ -103,7 +103,7 @@ def cancel_research_task(request: HttpRequest):
 
 @response_wrapper
 @require_GET
-@jwt_auth()
+@jwt_auth(perms=['research.view_research'])
 def task_steps(request: HttpRequest):
     """获取任务步骤日志 (全流程监控)
 

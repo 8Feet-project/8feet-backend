@@ -110,7 +110,6 @@ def verify_jwt_token(request: HttpRequest):
 def jwt_auth(perms: List[str] = None, whitelisted_tokens: List[str] = None):
     """JWT 认证与权限控制装饰器
 
-    参照 example-backend/core/api/auth.py 的 jwt_auth 装饰器。
     支持:
     - Bearer Token 认证 (JWT)
     - 固定 Token 白名单 (用于系统间调用)

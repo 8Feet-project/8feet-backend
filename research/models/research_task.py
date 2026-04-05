@@ -81,6 +81,11 @@ class ResearchTask(models.Model):
         verbose_name = '调研任务'
         verbose_name_plural = verbose_name
         ordering = ['-created_at']
+        permissions = [
+            ('create_research', '发起调研任务'),
+            ('view_research', '查看调研任务'),
+            ('cancel_research', '取消调研任务'),
+        ]
 
     def __str__(self):
         return f"[{self.get_status_display()}] {self.title}"
