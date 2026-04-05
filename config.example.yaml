@@ -1,0 +1,30 @@
+Debug: true
+
+# Django
+DjangoSecretKey: "1dyp#7!@)v4k7(q&%3sc3z637w!3v#e#m-yz#&cm+u64jrl!%e"
+
+# PostgreSQL 13
+DatabaseHost: localhost
+DatabasePort: 5432
+DatabaseUser: admin
+DatabasePassword: "8feet"
+DatabaseName: eightfeet
+
+# Redis 6.2
+RedisAddress: "localhost:6379"
+RedisPassword: ""
+RedisDatabase: 0
+
+# Minio (S3-compatible Object Storage)
+S3SecretId: minioadmin
+S3SecretKey: minioadmin
+S3Address: "localhost:9000"
+S3BucketReports: eightfeet-reports
+S3UseSSL: false
+
+# Mail (optional)
+SmtpUsername: ""
+SmtpFrom: ""
+SmtpPassword: ""
+SmtpHost: ""
+SmtpPort: 465

@@ -1,0 +1,55 @@
+services:
+  # ============================================================
+  # PostgreSQL 13.13 — 主数据库 (标准 Debian 版)
+  # ============================================================
+  db:
+    image: postgres:13.13
+    restart: always
+    environment:
+      POSTGRES_DB: eightfeet
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password123
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d eightfeet"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Redis 6.2.14 — 缓存 + Celery Broker + Channels Layer
+  # ============================================================
+  redis:
+    image: redis:6.2.14
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Minio — 对象存储
+  # ============================================================
+  minio:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: always
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - miniodata:/data
+
+volumes:
+  pgdata:
+  miniodata:
+
