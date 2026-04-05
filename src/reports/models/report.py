@@ -49,7 +49,6 @@ class Report(models.Model):
         verbose_name_plural = verbose_name
         ordering = ['-created_at']
         permissions = [
-            ('view_report', '查看调研报告'),
             ('followup_report', '报告深度追问'),
         ]
 

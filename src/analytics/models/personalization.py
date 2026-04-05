@@ -40,11 +40,6 @@ class Favorite(models.Model):
         verbose_name = '收藏记录'
         verbose_name_plural = verbose_name
         unique_together = ('user', 'item_type', 'item_id')
-        permissions = [
-            ('add_favorite', '添加收藏'),
-            ('remove_favorite', '删除收藏'),
-            ('view_favorite', '查看收藏列表'),
-        ]
 
 
 class Alert(models.Model):
@@ -87,7 +82,3 @@ class Alert(models.Model):
         db_table = 'alert_setting'
         verbose_name = '推送提醒设置'
         verbose_name_plural = verbose_name
-        permissions = [
-            ('create_alert', '创建动态提醒'),
-            ('view_alert', '查看提醒列表'),
-        ]
