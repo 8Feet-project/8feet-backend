@@ -1,9 +1,7 @@
 services:
-  # ============================================================
-  # PostgreSQL 13.13 — 主数据库 (标准 Debian 版)
-  # ============================================================
+  # PostgreSQL 17.9
   db:
-    image: postgres:13.13
+    image: postgres:17.9-alpine3.23
     restart: always
     environment:
       POSTGRES_DB: eightfeet
@@ -19,11 +17,9 @@ services:
       timeout: 5s
       retries: 5
 
-  # ============================================================
-  # Redis 6.2.14 — 缓存 + Celery Broker + Channels Layer
-  # ============================================================
+  # Redis 7.4.8
   redis:
-    image: redis:6.2.14
+    image: redis:7.4.8-alpine3.21
     restart: always
     ports:
       - "6379:6379"
@@ -33,23 +29,25 @@ services:
       timeout: 5s
       retries: 5
 
-  # ============================================================
-  # Minio — 对象存储
-  # ============================================================
+  # MinIO
   minio:
-    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: always
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9000:9000"         # API 端口
+      - "9001:9001"         # Web 控制台端口
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     command: server /data --console-address ":9001"
     volumes:
       - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
 
 volumes:
   pgdata:
   miniodata:
-

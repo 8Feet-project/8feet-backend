@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 8Feet 数据库初始化脚本 (Linux / macOS)
-# 版本锁定: PostgreSQL 13, Redis 6.2, Django 3.1.7
+# 版本锁定: PostgreSQL 13, Redis 6.2
 
 set -e
 
@@ -79,8 +79,8 @@ fi
 # 5. 执行 Django 数据库迁移
 # ============================================================
 echo -e "${YELLOW}[5/5] 执行 Django 数据库迁移...${NC}"
-python3 manage.py makemigrations users llm_manager research reports analytics
-python3 manage.py migrate
+uv run python src/manage.py makemigrations users llm_manager research reports analytics
+uv run python src/manage.py migrate
 
 echo -e "\n${GREEN}========================================${NC}"
 echo -e "${GREEN}  初始化完成！${NC}"
@@ -88,5 +88,5 @@ echo -e "${GREEN}========================================${NC}"
 echo -e "${CYAN}  PostgreSQL: localhost:5432${NC}"
 echo -e "${CYAN}  Redis:      localhost:6379${NC}"
 echo -e "${CYAN}  Minio:      http://localhost:9001 (管理界面)${NC}"
-echo -e "\n${CYAN}  运行开发服务器: python3 manage.py runserver${NC}"
+echo -e "\n${CYAN}  运行开发服务器: uv run python src/manage.py runserver${NC}"
 

@@ -2,19 +2,17 @@
 
 ## 项目简介
 
-**8Feet 商业对象智能深度调研分析平台** 的后端服务，基于 Django 3.1.7，采用 5 个独立 Django App 的模块化架构。
+**8Feet 商业对象智能深度调研分析平台** 的后端服务，基于 Django，采用 5 个独立 Django App 的模块化架构。
 
 ## 快速开始
 
 ### 1. 环境要求
-- Python 3.8+
+- [uv](https://docs.astral.sh/uv/)
 - Docker
 
 ### 2. 安装依赖
 ```bash
-conda create -n feet python==3.9
-conda activate feet
-pip install -r requirements.txt
+uv sync
 ```
 
 ### 3. 一键初始化
@@ -24,7 +22,7 @@ Windows:
 ```
 Linux:
 ```bash
-.\scripts\init_db.sh # linux已验证
+./scripts/init_db.sh # linux已验证
 ```
 自动完成：
 - 启动 PostgreSQL 13 (端口 5432)
@@ -34,7 +32,7 @@ Linux:
 
 ### 4. 运行开发服务器
 ```bash
-python manage.py runserver
+uv run python src/manage.py runserver
 ```
 
 ## 模块架构
@@ -53,6 +51,7 @@ python manage.py runserver
 - **models/**: 数据库模型定义
 
 ## 技术栈
-- Django 3.1.7 + Django Channels 3.0.4
+- Django + Django Channels
 - PostgreSQL 13 + Redis 6.2 + Minio
-- JWT 认证 (PyJWT 2.0.1)
+- JWT 认证
+- Python 3.12+ (uv 管理依赖)
