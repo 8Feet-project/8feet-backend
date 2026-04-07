@@ -1,0 +1,23 @@
+[Unit]
+Description=8Feet Django ASGI Service (Daphne)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=eightfeet
+Group=eightfeet
+WorkingDirectory=/srv/8feet/8feet-backend
+EnvironmentFile=-/etc/8feet/8feet.env
+Environment=PYTHONPATH=/srv/8feet/8feet-backend/src
+Environment=DJANGO_SETTINGS_MODULE=eightfeet.settings
+ExecStartPre=/srv/8feet/8feet-backend/.venv/bin/python src/manage.py migrate --noinput
+ExecStartPre=/srv/8feet/8feet-backend/.venv/bin/python src/manage.py collectstatic --noinput
+ExecStart=/srv/8feet/8feet-backend/.venv/bin/daphne -b 127.0.0.1 -p 8000 eightfeet.asgi:application
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
