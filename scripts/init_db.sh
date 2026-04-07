@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 8Feet 数据库初始化脚本 (Linux / macOS)
-# 版本锁定: PostgreSQL 13, Redis 6.2
+# 版本锁定: PostgreSQL 17.9, Redis 7.4.8
 
 set -e
 
@@ -28,20 +28,20 @@ fi
 
 # 自动识别 docker-compose (V1) 或 docker compose (V2)
 if docker compose version > /dev/null 2>&1; then
-    DOKCER_COMPOSE_CMD="docker compose"
+    DOCKER_COMPOSE_CMD="docker compose"
 elif docker-compose version > /dev/null 2>&1; then
-    DOKCER_COMPOSE_CMD="docker-compose"
+    DOCKER_COMPOSE_CMD="docker-compose"
 else
     echo -e "${RED}未找到 Docker Compose。请确保已安装 docker-compose 插件或工具。${NC}"
     exit 1
 fi
-echo -e "  检测到 Compose 命令: ${CYAN}$DOKCER_COMPOSE_CMD${NC}"
+echo -e "  检测到 Compose 命令: ${CYAN}$DOCKER_COMPOSE_CMD${NC}"
 
 # ============================================================
-# 2. 启动基础服务 (PostgreSQL 13 + Redis 6.2 + Minio)
+# 2. 启动基础服务 (PostgreSQL 17.9 + Redis 7.4.8 + Minio)
 # ============================================================
-echo -e "${YELLOW}[2/5] 启动基础服务 (PostgreSQL 13, Redis 6.2, Minio)...${NC}"
-$DOKCER_COMPOSE_CMD up -d
+echo -e "${YELLOW}[2/5] 启动基础服务 (PostgreSQL 17.9, Redis 7.4.8, Minio)...${NC}"
+$DOCKER_COMPOSE_CMD up -d db redis minio minio-init
 if [ $? -ne 0 ]; then
     echo -e "${RED}Docker 服务启动失败。${NC}"
     exit 1
@@ -53,7 +53,7 @@ fi
 echo -e "${YELLOW}[3/5] 等待数据库就绪...${NC}"
 MAX_RETRIES=30
 RETRY_COUNT=0
-until $DOKCER_COMPOSE_CMD exec -T db pg_isready -U admin -d eightfeet > /dev/null 2>&1; do
+until $DOCKER_COMPOSE_CMD exec -T db pg_isready -U admin -d eightfeet > /dev/null 2>&1; do
     RETRY_COUNT=$((RETRY_COUNT + 1))
     if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
         echo -e "${RED}数据库未能在预期时间内就绪。${NC}"
@@ -79,7 +79,6 @@ fi
 # 5. 执行 Django 数据库迁移
 # ============================================================
 echo -e "${YELLOW}[5/5] 执行 Django 数据库迁移...${NC}"
-uv run python src/manage.py makemigrations users llm_manager research reports analytics
 uv run python src/manage.py migrate
 
 echo -e "\n${GREEN}========================================${NC}"
@@ -89,4 +88,3 @@ echo -e "${CYAN}  PostgreSQL: localhost:5432${NC}"
 echo -e "${CYAN}  Redis:      localhost:6379${NC}"
 echo -e "${CYAN}  Minio:      http://localhost:9001 (管理界面)${NC}"
 echo -e "\n${CYAN}  运行开发服务器: uv run python src/manage.py runserver${NC}"
-
