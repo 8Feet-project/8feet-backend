@@ -14,6 +14,7 @@ services:
         condition: service_healthy
     environment:
       DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
+      DJANGO_SERVE_STATIC: ${DJANGO_SERVE_STATIC:-true}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-CHANGE_ME_IN_PRODUCTION}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-127.0.0.1,localhost}
       DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://127.0.0.1,http://localhost}
