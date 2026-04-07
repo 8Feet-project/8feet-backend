@@ -1,5 +1,5 @@
 # 8Feet 数据库初始化脚本 (PowerShell)
-# 版本锁定: PostgreSQL 13, Redis 6.2
+# 版本锁定: PostgreSQL 17.9, Redis 7.4.8
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  8Feet 后端 - 数据库初始化脚本" -ForegroundColor Cyan
@@ -16,10 +16,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ============================================================
-# 2. 启动基础服务 (PostgreSQL 13 + Redis 6.2 + Minio)
+# 2. 启动基础服务 (PostgreSQL 17.9 + Redis 7.4.8 + Minio)
 # ============================================================
-Write-Host "[2/5] 启动基础服务 (PostgreSQL 13, Redis 6.2, Minio)..." -ForegroundColor Yellow
-docker-compose up -d
+Write-Host "[2/5] 启动基础服务 (PostgreSQL 17.9, Redis 7.4.8, Minio)..." -ForegroundColor Yellow
+docker-compose up -d db redis minio minio-init
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Docker 服务启动失败。"
     exit 1
@@ -62,7 +62,6 @@ if (-not (Test-Path "config.yaml")) {
 # 5. 执行 Django 数据库迁移
 # ============================================================
 Write-Host "[5/5] 执行 Django 数据库迁移..." -ForegroundColor Yellow
-uv run python src/manage.py makemigrations users llm_manager research reports analytics
 uv run python src/manage.py migrate
 
 if ($LASTEXITCODE -eq 0) {

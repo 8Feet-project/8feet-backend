@@ -6,8 +6,11 @@
 """
 from django.contrib import admin
 from django.urls import path, include
+from eightfeet.health import healthz, readyz
 
 urlpatterns = [
+    path('healthz', healthz),
+    path('readyz', readyz),
     path('admin/', admin.site.urls),
     # 用户与权限管理
     path('api/users/', include('users.urls')),

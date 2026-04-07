@@ -1,23 +1,51 @@
-Debug: true
+Debug: false
 
 # Django
-DjangoSecretKey: "1dyp#7!@)v4k7(q&%3sc3z637w!3v#e#m-yz#&cm+u64jrl!%e"
+DjangoSecretKey: "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"
+AllowedHosts: ["django.example.com", "127.0.0.1", "localhost"]
+CsrfTrustedOrigins: ["https://django.example.com"]
+SessionCookieSecure: true
+SessionCookieHttpOnly: true
+SessionCookieSameSite: "Lax"
+CsrfCookieSecure: true
+CsrfCookieDomain: ".example.com"
+CsrfCookieHttpOnly: false
+CsrfCookieSameSite: "Lax"
+CsrfUseSessions: false
 
-# PostgreSQL 13
+# CORS (生产建议关闭全开放)
+CorsAllowAllOrigins: false
+CorsAllowedOrigins: ["https://app.example.com"]
+
+# Security headers
+SecureSSLRedirect: true
+SecureHstsSeconds: 31536000
+SecureHstsIncludeSubdomains: true
+SecureHstsPreload: true
+SecureContentTypeNosniff: true
+SecureReferrerPolicy: "strict-origin-when-cross-origin"
+XFrameOptions: "DENY"
+
+# PostgreSQL
 DatabaseHost: localhost
 DatabasePort: 5432
 DatabaseUser: admin
-DatabasePassword: "8feet"
+DatabasePassword: "CHANGE_ME_DB_PASSWORD"
 DatabaseName: eightfeet
 
-# Redis 6.2
+# Redis
 RedisAddress: "localhost:6379"
 RedisPassword: ""
 RedisDatabase: 0
 
+# Channels (未配置时回落到 RedisAddress)
+ChannelRedisAddress: "localhost:6379"
+ChannelRedisPassword: ""
+ChannelRedisDatabase: 0
+
 # Minio (S3-compatible Object Storage)
-S3SecretId: minioadmin
-S3SecretKey: minioadmin
+S3SecretId: "CHANGE_ME_MINIO_USER"
+S3SecretKey: "CHANGE_ME_MINIO_PASSWORD"
 S3Address: "localhost:9000"
 S3BucketReports: eightfeet-reports
 S3UseSSL: false
@@ -28,3 +56,10 @@ SmtpFrom: ""
 SmtpPassword: ""
 SmtpHost: ""
 SmtpPort: 465
+
+# Static files
+StaticRoot: "/var/www/8feet/staticfiles"
+
+# Logging
+LogDir: "/var/log/8feet"
+LogLevel: "INFO"

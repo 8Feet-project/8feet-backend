@@ -1,18 +1,80 @@
 services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: 8feet-backend:latest
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
+      DJANGO_SERVE_STATIC: ${DJANGO_SERVE_STATIC:-true}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-CHANGE_ME_IN_PRODUCTION}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-127.0.0.1,localhost}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://127.0.0.1,http://localhost}
+      CORS_ALLOW_ALL_ORIGINS: ${CORS_ALLOW_ALL_ORIGINS:-false}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173}
+      CSRF_COOKIE_DOMAIN: ${CSRF_COOKIE_DOMAIN:-}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      SESSION_COOKIE_HTTPONLY: ${SESSION_COOKIE_HTTPONLY:-true}
+      SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-Lax}
+      CSRF_COOKIE_SECURE: ${CSRF_COOKIE_SECURE:-true}
+      CSRF_COOKIE_HTTPONLY: ${CSRF_COOKIE_HTTPONLY:-false}
+      CSRF_COOKIE_SAMESITE: ${CSRF_COOKIE_SAMESITE:-Lax}
+      SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-true}
+      SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-31536000}
+      SECURE_HSTS_INCLUDE_SUBDOMAINS: ${SECURE_HSTS_INCLUDE_SUBDOMAINS:-true}
+      SECURE_HSTS_PRELOAD: ${SECURE_HSTS_PRELOAD:-true}
+      SECURE_CONTENT_TYPE_NOSNIFF: ${SECURE_CONTENT_TYPE_NOSNIFF:-true}
+      SECURE_REFERRER_POLICY: ${SECURE_REFERRER_POLICY:-strict-origin-when-cross-origin}
+      X_FRAME_OPTIONS: ${X_FRAME_OPTIONS:-DENY}
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-admin}
+      DB_PASSWORD: ${DB_PASSWORD:-password123}
+      DB_NAME: ${DB_NAME:-eightfeet}
+      REDIS_ADDRESS: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DATABASE: ${REDIS_DATABASE:-0}
+      CHANNEL_REDIS_ADDRESS: redis:6379
+      S3_SECRET_ID: ${S3_SECRET_ID:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ADDRESS: minio:9000
+      S3_BUCKET_REPORTS: ${S3_BUCKET_REPORTS:-eightfeet-reports}
+      S3_USE_SSL: ${S3_USE_SSL:-false}
+      STATIC_ROOT: /var/www/8feet/staticfiles
+      LOG_DIR: /var/log/8feet
+    ports:
+      - "8000:8000"
+    volumes:
+      - staticfiles:/var/www/8feet/staticfiles
+      - applogs:/var/log/8feet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # PostgreSQL 17.9
   db:
     image: postgres:17.9-alpine3.23
     restart: always
     environment:
-      POSTGRES_DB: eightfeet
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: ${DB_NAME:-eightfeet}
+      POSTGRES_USER: ${DB_USER:-admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password123}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d eightfeet"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -37,8 +99,8 @@ services:
       - "9000:9000"         # API 端口
       - "9001:9001"         # Web 控制台端口
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${S3_SECRET_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
     command: server /data --console-address ":9001"
     volumes:
       - miniodata:/data
@@ -48,6 +110,20 @@ services:
       timeout: 20s
       retries: 3
 
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_SECRET_ID:-minioadmin} ${S3_SECRET_KEY:-minioadmin} &&
+      mc mb -p local/${S3_BUCKET_REPORTS:-eightfeet-reports} || true
+      "
+    restart: "no"
+
 volumes:
   pgdata:
   miniodata:
+  staticfiles:
+  applogs:
