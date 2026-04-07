@@ -35,3 +35,8 @@ Thumbs.db
 
 # Config (keep example.yaml)
 config.yaml
+.env
+logs/
+backup/
+docs/
+.codex
