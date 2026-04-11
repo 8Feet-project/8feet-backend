@@ -1,17 +1,17 @@
-"""
-用户认证业务逻辑 — interface 层
-纯 Python 业务逻辑，不涉及 HTTP。
-参照 example-backend/core/interface/ 的设计模式。
-"""
-from datetime import timedelta
-from typing import Tuple, Optional
-
 import jwt
+import random
+import string
+from datetime import timedelta
+from typing import Tuple, Optional, Dict, Any, List
+
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
+from django.core.cache import cache
+from django.db import transaction
 from django.utils import timezone
 
 from users.models.auth_record import AuthRecord
+from users.models.user_profile import UserProfile, ROLE_SUPER_ADMIN, ROLE_USER
 
 
 def generate_access_token(user_id: int, access_token_delta: int = 3) -> str:
@@ -55,42 +55,102 @@ def generate_refresh_token(user, refresh_token_delta: int = 14) -> str:
     return jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
 
 
-def authenticate_user(username: str, password: str) -> Tuple[bool, Optional[str], Optional[dict]]:
-    """用户登录认证
+def get_token_dict(user) -> Dict[str, Any]:
+    """获取标准的 token 返回结构"""
+    return {
+        "access_token": generate_access_token(user.id),
+        "refresh_token": generate_refresh_token(user),
+        "expires_in": 3 * 3600  # 3 小时
+    }
 
-    Returns:
-        (成功与否, 错误消息, token_dict)
-    """
-    from django.db.models import Q
 
+def register_user(username: str, nickname: str, password: str, email: str, phone: str = None, invite_code: str = None) -> Tuple[bool, str, Optional[Dict]]:
+    """用户注册逻辑"""
     User = get_user_model()
-    user = User.objects.filter(Q(email=username) | Q(username=username)).first()
-    if not user:
-        return (False, "用户名或密码错误", None)
+    if User.objects.filter(username=username).exists():
+        return False, "用户名已存在", None
+    if User.objects.filter(email=email).exists():
+        return False, "邮箱已被注册", None
 
+    try:
+        with transaction.atomic():
+            # 检查是否是首个用户（初始化平台逻辑）
+            is_first_user = not User.objects.exists()
+            role = ROLE_SUPER_ADMIN if is_first_user else ROLE_USER
+            
+            user = User.objects.create_user(
+                username=username,
+                password=password,
+                email=email,
+                first_name=nickname  # 默认将 nickname 存入 first_name 保证 Django 兼容性
+            )
+            
+            # 创建 Profile
+            UserProfile.objects.create(
+                user=user,
+                phone=phone,
+                role=role,
+                nickname=nickname
+            )
+            
+            data = {
+                "user_id": user.id,
+                "role": role,
+                "need_initialize": is_first_user,
+                **get_token_dict(user)
+            }
+            return True, "注册成功", data
+    except Exception as e:
+        return False, f"注册失败: {str(e)}", None
+
+
+def authenticate_by_username(username: str, password: str) -> Tuple[bool, Optional[str], Optional[dict]]:
+    """用户名登录认证"""
+    User = get_user_model()
+    user = User.objects.filter(username=username).first()
+    if not user:
+        return False, "用户名或密码错误", None
+
+    return _perform_login(user, password)
+
+
+def authenticate_by_email(email: str, password: str) -> Tuple[bool, Optional[str], Optional[dict]]:
+    """邮箱登录认证"""
+    User = get_user_model()
+    user = User.objects.filter(email=email).first()
+    if not user:
+        return False, "邮箱或密码错误", None
+
+    return _perform_login(user, password)
+
+
+def _perform_login(user, password) -> Tuple[bool, Optional[str], Optional[dict]]:
+    """执行通用的登录后校验逻辑"""
     user = authenticate(username=user.username, password=password)
     if not user:
-        return (False, "用户名或密码错误", None)
+        return False, "密码错误", None
 
     if not user.is_active:
-        return (False, "账户已被禁用", None)
+        return False, "账户已被禁用", None
 
     user.last_login = timezone.now()
     user.save()
 
-    tokens = {
-        "access_token": generate_access_token(user.id),
-        "refresh_token": generate_refresh_token(user),
+    profile = getattr(user, 'profile', None)
+    
+    tokens = get_token_dict(user)
+    data = {
+        "user_id": user.id,
+        "nickname": profile.nickname if profile else user.get_full_name(),
+        "role": profile.role if profile else "user",
+        "permissions": list(user.get_all_permissions()),
+        **tokens
     }
-    return (True, None, tokens)
+    return True, None, data
 
 
-def refresh_access_token(refresh_token_str: str) -> Tuple[bool, Optional[str], Optional[str]]:
-    """刷新 access_token
-
-    Returns:
-        (成功与否, 错误消息, 新 access_token)
-    """
+def refresh_access_token(refresh_token_str: str) -> Tuple[bool, Optional[str], Optional[Dict]]:
+    """刷新 access_token"""
     try:
         token = jwt.decode(
             refresh_token_str, settings.SECRET_KEY, algorithms="HS256")
@@ -104,10 +164,146 @@ def refresh_access_token(refresh_token_str: str) -> Tuple[bool, Optional[str], O
         if auth_record.expires_by < timezone.now():
             raise jwt.ExpiredSignatureError
 
-        new_access_token = generate_access_token(token.get("user_id"))
-        return (True, None, new_access_token)
+        user_id = token.get("user_id")
+        User = get_user_model()
+        user = User.objects.get(pk=user_id)
+        
+        # 生成新的 token 对
+        return True, None, get_token_dict(user)
 
-    except jwt.ExpiredSignatureError:
-        return (False, "Token 已过期", None)
-    except jwt.InvalidTokenError:
-        return (False, "无效的 Token", None)
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return False, "无效或已过期的刷新令牌", None
+    except Exception as e:
+        return False, f"刷新失败: {str(e)}", None
+
+
+def send_verification_email(email: str, scene: str) -> Tuple[bool, int]:
+    """发送邮箱验证码"""
+    code = ''.join(random.choices(string.digits, k=6))
+    expire_in = 300 # 5分钟
+    
+    cache_key = f"email_code_{scene}_{email}"
+    cache.set(cache_key, code, expire_in)
+    
+    # TODO: 待补全发送邮件逻辑
+    print(f"Sending email to {email} with code: {code} for scene: {scene}")
+    
+    return True, expire_in
+
+
+def verify_email_code(email: str, code: str) -> bool:
+    """验证邮箱验证码 (通用场景)"""
+    # 尝试多种可能的场景
+    for scene in ['register', 'bind', 'reset_password']:
+        cache_key = f"email_code_{scene}_{email}"
+        saved_code = cache.get(cache_key)
+        if saved_code and saved_code == code:
+            cache.delete(cache_key)
+            return True
+    return False
+
+
+def request_password_reset(username_or_email: str) -> Tuple[bool, str]:
+    """发起密码重置参与者：
+    1. 用户名或邮箱是否存在
+    2. 生成重置令牌并存储在缓存
+    """
+    from django.db.models import Q
+    User = get_user_model()
+    user = User.objects.filter(Q(username=username_or_email) | Q(email=username_or_email)).first()
+    if not user:
+        return False, "用户不存在"
+    
+    if not user.email:
+        return False, "用户未绑定邮箱，无法重置"
+    
+    # 生成重置令牌
+    reset_token = ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+    cache.set(f"password_reset_{reset_token}", user.id, 1800) # 30分钟有效
+    
+    # TODO: 待补全发送邮件逻辑
+    print(f"Sending password reset token {reset_token} to {user.email}")
+    
+    return True, "验证邮件已发送"
+
+
+def confirm_password_reset(reset_token: str, new_password: str) -> Tuple[bool, str]:
+    """确认密码重置"""
+    user_id = cache.get(f"password_reset_{reset_token}")
+    if not user_id:
+        return False, "重置令牌无效或已过期"
+    
+    User = get_user_model()
+    user = User.objects.filter(pk=user_id).first()
+    if not user:
+        return False, "用户不存在"
+    
+    user.set_password(new_password)
+    user.save()
+    cache.delete(f"password_reset_{reset_token}")
+    
+    return True, "密码更新成功"
+
+
+def update_user_profile(user, data: Dict[str, Any]) -> Tuple[bool, str, List[str]]:
+    """更新用户信息"""
+    profile = getattr(user, 'profile', None)
+    if not profile:
+        return False, "用户 Profile 不存在", []
+    
+    updated_fields = []
+    
+    # 允许更新的字段
+    allowed_fields = ['nickname', 'phone', 'avatar_url', 'email']
+
+    for field in allowed_fields:
+        if field == 'email':
+            user.email = data[field]
+            user.save()
+            updated_fields.append(field)
+        elif field in data:
+            setattr(profile, field, data[field])
+            updated_fields.append(field)
+        
+    if updated_fields:
+        profile.save()
+        
+    return True, "更新成功", updated_fields
+
+
+def change_user_password(user, old_password: str, new_password: str) -> Tuple[bool, str]:
+    """修改密码"""
+    if not user.check_password(old_password):
+        return False, "旧密码错误"
+    
+    user.set_password(new_password)
+    user.save()
+    return True, "密码修改成功"
+
+
+def blacklist_token(header: str) -> bool:
+    """将 Token 加入黑名单"""
+    if not header:
+        return False
+        
+    try:
+        parts = header.split(" ")
+        if len(parts) != 2 or parts[0] != "Bearer":
+            return False
+        
+        token_str = parts[1]
+        
+        # 解开 token 获取过期时间
+        payload = jwt.decode(token_str, settings.SECRET_KEY, algorithms="HS256")
+        exp = payload.get("exp")
+        
+        if exp:
+            # 计算剩余有效期
+            current_ts = timezone.now().timestamp()
+            timeout = int(exp - current_ts)
+            if timeout > 0:
+                cache.set(f"blacklist_{token_str}", True, timeout)
+                return True
+        return False
+    except Exception:
+        return False

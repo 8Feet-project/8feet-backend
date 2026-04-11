@@ -9,17 +9,16 @@ from typing import Tuple, Optional, List
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 
-from users.models.user_profile import UserProfile, ROLE_ADMIN, ROLE_NORMAL
+from users.models.user_profile import UserProfile, ROLE_ADMIN, ROLE_USER
 
 User = get_user_model()
 
-VALID_ROLES = {ROLE_ADMIN, ROLE_NORMAL}
+VALID_ROLES = {ROLE_ADMIN, ROLE_USER}
 
 
 def create_user_account(
     username: str, password: str, email: str = '',
-    role: str = ROLE_NORMAL, phone: str = None,
-    organization: str = None
+    role: str = ROLE_USER, phone: str = None
 ) -> Tuple[bool, str, Optional[int]]:
     """创建用户账户并分配角色
 
@@ -41,7 +40,7 @@ def create_user_account(
 
     # 创建 Profile (信号会自动分配 Group)
     UserProfile.objects.create(
-        user=user, role=role, phone=phone, organization=organization
+        user=user, role=role, phone=phone
     )
 
     return True, "用户创建成功", user.id
@@ -49,7 +48,7 @@ def create_user_account(
 
 def update_user_account(
     target_user_id: int, email: str = None, role: str = None,
-    phone: str = None, organization: str = None
+    phone: str = None
 ) -> Tuple[bool, str]:
     """修改用户信息/角色
 
@@ -73,8 +72,6 @@ def update_user_account(
 
     if phone is not None:
         profile.phone = phone
-    if organization is not None:
-        profile.organization = organization
 
     profile.save()  # 信号会自动同步 Group
     return True, "用户信息已更新"
@@ -115,9 +112,8 @@ def list_all_users() -> List[dict]:
             "email": user.email,
             "is_active": user.is_active,
             "is_staff": user.is_staff,
-            "role": profile.role if profile else ROLE_NORMAL,
+            "role": profile.role if profile else ROLE_USER,
             "phone": profile.phone if profile else None,
-            "organization": profile.organization if profile else None,
             "date_joined": user.date_joined.strftime('%Y-%m-%d %H:%M:%S'),
         })
     return result

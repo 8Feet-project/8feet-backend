@@ -52,17 +52,11 @@ def create_task(request: HttpRequest):
 @response_wrapper
 @require_GET
 @jwt_auth(perms=['research.view_research'])
-def task_detail(request: HttpRequest):
+def task_detail(request: HttpRequest, task_id: int):
     """获取调研任务详情
-
-    [route]: GET /api/research/task/detail?task_id=1
+    [route]: GET /api/v1/research/tasks/{task_id}
     """
-    task_id = request.GET.get('task_id')
-    if not task_id:
-        return failed_api_response(
-            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "task_id 不能为空")
-
-    data = get_task_detail(int(task_id))
+    data = get_task_detail(task_id)
     if not data:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
 
@@ -74,45 +68,35 @@ def task_detail(request: HttpRequest):
 @jwt_auth(perms=['research.view_research'])
 def task_list(request: HttpRequest):
     """获取当前用户的调研任务列表
-
-    [route]: GET /api/research/task/list
+    [route]: GET /api/v1/research/tasks
     """
     tasks = list_user_tasks(request.user.id)
-    return success_api_response(tasks)
+    return success_api_response({
+        "list": tasks,
+        "total": len(tasks)
+    })
 
 
 @response_wrapper
 @require_POST
 @jwt_auth(perms=['research.cancel_research'])
-def cancel_research_task(request: HttpRequest):
+def cancel_research_task(request: HttpRequest, task_id: int):
     """取消调研任务
-
-    [route]: POST /api/research/task/cancel
+    [route]: POST /api/v1/research/tasks/{task_id}/cancel
     """
-    task_id = request.POST.get('task_id')
-    if not task_id:
-        return failed_api_response(
-            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "task_id 不能为空")
-
-    success, message = cancel_task(int(task_id), request.user.id)
+    success, message = cancel_task(task_id, request.user.id)
     if not success:
         return failed_api_response(ErrorCode.REFUSE_ACCESS, message)
 
-    return success_api_response()
+    return success_api_response({"task_id": task_id, "status": "cancelled"})
 
 
 @response_wrapper
 @require_GET
 @jwt_auth(perms=['research.view_research'])
-def task_steps(request: HttpRequest):
+def task_steps(request: HttpRequest, task_id: int):
     """获取任务步骤日志 (全流程监控)
-
-    [route]: GET /api/research/task/steps?task_id=1
+    [route]: GET /api/v1/research/tasks/{task_id}/workflow
     """
-    task_id = request.GET.get('task_id')
-    if not task_id:
-        return failed_api_response(
-            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "task_id 不能为空")
-
-    logs = get_task_step_logs(int(task_id))
-    return success_api_response(logs)
+    logs = get_task_step_logs(task_id)
+    return success_api_response({"task_id": task_id, "nodes": logs})
