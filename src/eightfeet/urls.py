@@ -12,14 +12,28 @@ urlpatterns = [
     path('healthz', healthz),
     path('readyz', readyz),
     path('admin/', admin.site.urls),
-    # 用户与权限管理
-    path('api/users/', include('users.urls')),
-    # 大模型配置管理
-    path('api/llm/', include('llm_manager.urls')),
-    # 调研任务与 DeepSearch
-    path('api/research/', include('research.urls')),
-    # 报告生成与管理
-    path('api/reports/', include('reports.urls')),
-    # 日志/统计/个性化
-    path('api/analytics/', include('analytics.urls')),
+    
+    # 统一 v1 接口前缀
+    path('api/v1/', include([
+        # 认证与账户
+        path('auth/', include('users.urls.urls_auth')),
+        path('users/', include('users.urls.urls_user')),
+        path('admin/users/', include('users.urls.urls_admin')),
+        # 平台初始化
+        path('platform/', include('eightfeet.urls_platform')),
+        # 大模型管理 (管理端)
+        path('admin/models/', include('llm_manager.urls_admin')),
+        path('model-routing/', include('llm_manager.urls_routing')),
+        # 调研任务
+        path('research/', include('research.urls')),
+        # 报告
+        path('reports/', include('reports.urls')),
+        # 收藏与提醒 (根据文档规划)
+        path('favorites/', include('analytics.urls_favorites')),
+        path('alerts/', include('analytics.urls_alerts')),
+        path('messages/', include('analytics.urls_messages')),
+        # 统计看板与日志 (管理端)
+        path('admin/dashboard/', include('analytics.urls_dashboard')),
+        path('admin/logs/', include('analytics.urls_logs')),
+    ])),
 ]
