@@ -6,11 +6,13 @@ from django.db import models
 from django.contrib.auth import get_user_model
 
 
-ROLE_ADMIN = 'ADMIN'
-ROLE_NORMAL = 'NORMAL'
+ROLE_SUPER_ADMIN = 'super_admin'
+ROLE_ADMIN = 'admin'
+ROLE_USER = 'user'
 ROLE_CHOICES = [
+    (ROLE_SUPER_ADMIN, '超级管理员'),
     (ROLE_ADMIN, '管理员'),
-    (ROLE_NORMAL, '普通用户'),
+    (ROLE_USER, '普通用户'),
 ]
 
 
@@ -28,17 +30,20 @@ class UserProfile(models.Model):
         max_length=512, null=True, blank=True,
         help_text="头像 URL (Minio 路径)"
     )
+    nickname = models.CharField(
+        max_length=64, null=True, blank=True,
+        help_text="用户昵称"
+    )
     phone = models.CharField(
         max_length=20, null=True, blank=True,
         help_text="联系电话"
     )
-    organization = models.CharField(
-        max_length=256, null=True, blank=True,
-        help_text="所属单位/组织"
-    )
     role = models.CharField(
-        max_length=16, choices=ROLE_CHOICES, default=ROLE_NORMAL,
-        help_text="用户角色: ADMIN 或 NORMAL"
+        max_length=16, choices=ROLE_CHOICES, default=ROLE_USER,
+        help_text="用户角色"
+    )
+    email_verified = models.BooleanField(
+        default=False, help_text="邮箱是否已验证"
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
