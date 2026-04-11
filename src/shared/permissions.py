@@ -10,58 +10,60 @@ from django.contrib.auth.models import Group, Permission
 # 角色-权限映射配置
 # ============================================================
 ROLE_PERMISSIONS = {
-    'ADMIN': [
-        # 用户管理 (管理员专属)
+    'super_admin': [
+        # 用户管理
         'users.create_user',
         'users.update_user',
         'users.toggle_user',
         'users.view_user',
-        # LLM 配置管理 (管理员专属)
+        # 平台初始化与模型管理
         'llm_manager.change_llmconfig',
         'llm_manager.view_llmconfig',
-        # 调研任务
+        # 统计与日志
+        'analytics.view_dashboard',
+        'analytics.view_audit_log',
+        # 所有业务权限
         'research.create_research',
         'research.view_research',
         'research.cancel_research',
-        # 调研报告
         'reports.view_report',
         'reports.followup_report',
-        # 收藏
         'analytics.add_favorite',
-        'analytics.remove_favorite',
         'analytics.view_favorite',
-        # 提醒
         'analytics.create_alert',
         'analytics.view_alert',
-        # 统计看板
-        'analytics.view_dashboard',
     ],
-    'NORMAL': [
-        # LLM 查看 (不含修改)
+    'admin': [
+        # 部分用户管理
+        'users.view_user',
+        'users.update_user',
+        # 模型查看
         'llm_manager.view_llmconfig',
-        # 调研任务
+        # 统计与日志
+        'analytics.view_dashboard',
+        # 基础业务权限
         'research.create_research',
         'research.view_research',
-        'research.cancel_research',
-        # 调研报告
         'reports.view_report',
-        'reports.followup_report',
-        # 收藏
         'analytics.add_favorite',
-        'analytics.remove_favorite',
         'analytics.view_favorite',
-        # 提醒
+    ],
+    'user': [
+        # 仅基础业务权限
+        'research.create_research',
+        'research.view_research',
+        'reports.view_report',
+        'analytics.add_favorite',
+        'analytics.view_favorite',
         'analytics.create_alert',
-        'analytics.view_alert',
-        # 统计看板
-        'analytics.view_dashboard',
     ],
 }
 
 # 角色对应的 Group 名称
 ROLE_GROUP_MAP = {
-    'ADMIN': 'admin_group',
-    'NORMAL': 'normal_group',
+    'super_admin': 'super_admin_group',
+    'admin': 'admin_group',
+    'user': 'user_group',
 }
 
 
