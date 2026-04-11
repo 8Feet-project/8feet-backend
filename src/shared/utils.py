@@ -91,6 +91,12 @@ def verify_jwt_token(request: HttpRequest):
 
         if auth_type != "Bearer":
             raise jwt.InvalidTokenError
+            
+        # 检查黑名单
+        from django.core.cache import cache
+        if cache.get(f"blacklist_{auth_token}"):
+            return (False, "Token 已失效 (已注销)", "")
+
         token = jwt.decode(
             auth_token, settings.SECRET_KEY, algorithms="HS256")
         if token.get("type") != "access_token":
