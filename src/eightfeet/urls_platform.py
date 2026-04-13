@@ -34,7 +34,7 @@ def initialize(request):
         username = "super_admin"
         password = "super_admin_password"
         email = "23373052@buaa.edu.cn"
-        nickname = "超级管理员"
+        nickname = "SUPERADMIN"
         
         from users.interface.auth_interface import register_user
         success, message, result = register_user(username, nickname, password, email)
