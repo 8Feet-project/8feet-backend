@@ -4,15 +4,25 @@ research URL 配置
 """
 from django.urls import path
 from research.api.research_api import (
-    create_task, task_detail, task_list,
-    cancel_research_task, task_steps, intervene_task
+    cancel_research_task,
+    create_task,
+    task_detail,
+    task_events,
+    task_intervention_detail,
+    task_intervention_submit,
+    task_list,
+    task_status,
+    task_steps,
 )
 
 urlpatterns = [
-    path('tasks', task_list, name='research-task-list'),     # GET /api/v1/research/tasks
-    path('task', create_task, name='research-task-create'), # POST /api/v1/research/task
-    path('tasks/<int:task_id>', task_detail, name='research-task-detail'), # GET
-    path('tasks/<int:task_id>/cancel', cancel_research_task, name='research-task-cancel'), # POST
-    path('tasks/<int:task_id>/workflow', task_steps, name='research-task-workflow'), # GET
-    path('tasks/<int:task_id>/intervene', intervene_task, name='research-task-intervene'), # POST
+    path('tasks', task_list, name='research-task-list'),
+    path('task', create_task, name='research-task-create'),
+    path('tasks/<int:task_id>', task_detail, name='research-task-detail'),
+    path('tasks/<int:task_id>/status', task_status, name='research-task-status'),
+    path('tasks/<int:task_id>/cancel', cancel_research_task, name='research-task-cancel'),
+    path('tasks/<int:task_id>/workflow', task_steps, name='research-task-workflow'),
+    path('tasks/<int:task_id>/events', task_events, name='research-task-events'),
+    path('tasks/<int:task_id>/interventions/<int:node_id>', task_intervention_detail, name='research-task-intervention-detail'),
+    path('tasks/<int:task_id>/interventions/<int:node_id>/submit', task_intervention_submit, name='research-task-intervention-submit'),
 ]

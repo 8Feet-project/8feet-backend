@@ -6,6 +6,7 @@
 """
 from enum import Enum
 from functools import wraps
+import json
 from typing import List
 
 import jwt
@@ -65,6 +66,16 @@ def response_wrapper(func):
             return JsonResponse(res)
         return res
     return wrapper
+
+
+def parse_json_body(request: HttpRequest):
+    """解析 JSON 请求体，失败时返回空字典"""
+    if not getattr(request, 'body', b''):
+        return {}
+    try:
+        return json.loads(request.body.decode('utf-8'))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {}
 
 
 # ============================================================
