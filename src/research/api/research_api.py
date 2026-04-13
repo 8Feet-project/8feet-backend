@@ -11,7 +11,8 @@ from shared.utils import (
 )
 from research.interface.research_interface import (
     create_research_task, get_task_detail,
-    list_user_tasks, cancel_task, get_task_step_logs
+    list_user_tasks, cancel_task, get_task_step_logs,
+    respond_to_step
 )
 
 
@@ -100,3 +101,37 @@ def task_steps(request: HttpRequest, task_id: int):
     """
     logs = get_task_step_logs(task_id)
     return success_api_response({"task_id": task_id, "nodes": logs})
+
+
+@response_wrapper
+@require_POST
+@jwt_auth(perms=['research.create_research'])  # 需要发起调研相同的权限
+def intervene_task(request: HttpRequest, task_id: int):
+    """用户介入调研任务，提供反馈
+    [route]: POST /api/v1/research/tasks/{task_id}/intervene
+    """
+    step_id = request.POST.get('step_id')
+    action = request.POST.get('action') # 'CONTINUE', 'MODIFY', 'SKIP', 'CANCEL'
+    
+    import json
+    data_str = request.POST.get('response_data', '{}')
+    try:
+        response_data = json.loads(data_str)
+    except (json.JSONDecodeError, TypeError):
+        response_data = {}
+
+    if not step_id or not action:
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "step_id 和 action 不能为空")
+
+    success, message = respond_to_step(
+        task_id=task_id, 
+        user_id=request.user.id, 
+        step_id=int(step_id), 
+        action=action, 
+        response_data=response_data
+    )
+    
+    if not success:
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
+        
+    return success_api_response({"message": "反馈已接收，任务继续安排执行"})

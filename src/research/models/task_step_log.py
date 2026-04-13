@@ -38,6 +38,14 @@ class TaskStepLog(models.Model):
         default=dict,
         help_text="步骤详情: 当前处理的文档名、迭代次数等"
     )
+    is_interactive = models.BooleanField(
+        default=False,
+        help_text="此步骤是否需要用户介入反馈"
+    )
+    user_response = models.JSONField(
+        null=True, blank=True,
+        help_text="用户介入后的反馈数据"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

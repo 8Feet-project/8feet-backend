@@ -112,6 +112,73 @@ def get_task_step_logs(task_id: int) -> List[dict]:
     FR-JSDY-0003: 全流程可视化监控
     """
     logs = TaskStepLog.objects.filter(task_id=task_id).values(
-        'id', 'step_name', 'step_status', 'detail', 'created_at'
+        'id', 'step_name', 'step_status', 'detail', 
+        'is_interactive', 'user_response', 'created_at'
     )
     return list(logs)
+
+
+def pause_research_task(task_id: int, step_name: str, detail: dict) -> Tuple[bool, Optional[str]]:
+    """Agent 请求暂停以等待用户介入"""
+    task = ResearchTask.objects.filter(pk=task_id).first()
+    if not task:
+        return (False, "任务不存在")
+    if task.status in (STATUS_CANCELLED, 'COMPLETED', 'FAILED'):
+        return (False, "无效的任务状态")
+
+    from research.models.research_task import STATUS_WAITING_USER
+    task.status = STATUS_WAITING_USER
+    task.save()
+
+    # 创建一个需要交互的步骤日志
+    TaskStepLog.objects.create(
+        task=task,
+        step_name=step_name,
+        step_status='PAUSED',
+        detail=detail,
+        is_interactive=True
+    )
+    return (True, None)
+
+
+def respond_to_step(task_id: int, user_id: int, step_id: int, action: str, 
+                    response_data: dict = None) -> Tuple[bool, Optional[str]]:
+    """用户提供反馈，继续或终止任务"""
+    task = ResearchTask.objects.filter(pk=task_id, user_id=user_id).first()
+    if not task:
+        return (False, "任务不存在或无权操作")
+        
+    from research.models.research_task import STATUS_WAITING_USER
+    if task.status != STATUS_WAITING_USER:
+        return (False, "当前任务未处于等待介入状态")
+
+    step = TaskStepLog.objects.filter(pk=step_id, task_id=task_id, is_interactive=True).first()
+    if not step:
+        return (False, "无效的介入步骤")
+
+    # 记录用户的响应
+    step.user_response = {
+        "action": action,
+        "data": response_data or {}
+    }
+    step.step_status = 'COMPLETED'
+    step.save()
+
+    if action == 'CANCEL':
+        task.status = STATUS_CANCELLED
+        task.save()
+        TaskStepLog.objects.create(
+            task=task, step_name="任务中止", step_status="COMPLETED",
+            detail={"message": "用户在介入时选择中止任务"}
+        )
+    else:
+        # TODO: 根据 action 决定恢复到 SEARCHING 还是 ANALYZING，这里先简单设为 SEARCHING
+        task.status = 'SEARCHING' 
+        task.save()
+        TaskStepLog.objects.create(
+            task=task, step_name="恢复运行", step_status="RUNNING",
+            detail={"message": "接收到用户反馈，任务继续执行", "action": action}
+        )
+        # TODO: 真正唤醒 Celery 任务继续往下走
+
+    return (True, None)
