@@ -30,7 +30,7 @@ def initialize(request):
     super_admin_profile = UserProfile.objects.filter(role=ROLE_SUPER_ADMIN).first()
     
     if request.method == 'POST' and not super_admin_profile:
-        # 用户要求直接配置参数，不从 Body 解析
+        # 直接配置参数
         username = "super_admin"
         password = "super_admin_password"
         email = "23373052@buaa.edu.cn"

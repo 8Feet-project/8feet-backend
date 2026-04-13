@@ -22,8 +22,8 @@ urlpatterns = [
         # 平台初始化
         path('platform/', include('eightfeet.urls_platform')),
         # 大模型管理 (管理端)
-        path('admin/models/', include('llm_manager.urls_admin')),
-        path('model-routing/', include('llm_manager.urls_routing')),
+        path('admin/models/', include('llm_manager.urls.urls_admin')),
+        path('model-routing/', include('llm_manager.urls.urls_routing')),
         # 调研任务
         path('research/', include('research.urls')),
         # 报告
