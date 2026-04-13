@@ -42,3 +42,9 @@ docs/
 .codex
 config.yaml
 deploy.sh
+
+#docs
+*.md
+*.doc
+*.docx
+*.pdf
