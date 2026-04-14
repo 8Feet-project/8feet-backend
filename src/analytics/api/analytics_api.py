@@ -11,7 +11,8 @@ from shared.utils import (
 )
 from analytics.interface.analytics_interface import (
     get_dashboard_stats, add_favorite, remove_favorite,
-    list_favorites, create_alert, list_alerts
+    list_favorites, create_alert, list_alerts,
+    get_cost_report
 )
 
 
@@ -95,3 +96,20 @@ def alert_list(request: HttpRequest):
     """
     alerts = list_alerts(request.user.id)
     return success_api_response({"list": alerts, "total": len(alerts)})
+
+
+@response_wrapper
+@require_GET
+@jwt_auth(perms=['analytics.view_dashboard'])
+def cost_report(request: HttpRequest):
+    """成本审计报表
+    [route]: GET /api/v1/admin/dashboard/cost-report?start_date=2024-01-01
+    """
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    
+    report = get_cost_report(start_date, end_date)
+    return success_api_response({
+        "report": report,
+        "period": {"start": start_date, "end": end_date}
+    })

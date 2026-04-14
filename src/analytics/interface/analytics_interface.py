@@ -26,34 +26,61 @@ def log_operation(user_id: int, action_type: str, target_module: str,
 
 
 def get_dashboard_stats() -> dict:
-    """获取统计看板数据
+    """获取综合统计看板数据
 
-    FR-SJGL-0003: 全局调研请求量、各对象调研频次、大模型调用量排行、用户活跃度
+    FR-SJGL-0003: 多维度数据统计
+    FR-SJGL-0005: 成本审计 (Token/费用)
     """
+    from django.db.models import Sum, Count, Avg
+    from django.utils import timezone
+    from datetime import timedelta
     from research.models.research_task import ResearchTask
+    from llm_manager.models.model_usage import ModelUsage
+    
+    now = timezone.now()
+    thirty_days_ago = now - timedelta(days=30)
 
-    # 全局调研请求量
+    # 1. 调研任务统计
     total_tasks = ResearchTask.objects.count()
-
-    # 各对象类型调研频次
     type_stats = list(
         ResearchTask.objects.values('object_type')
         .annotate(count=Count('id'))
         .order_by('-count')
     )
 
-    # 大模型调用量排行
-    llm_stats = list(
-        LLMCallLog.objects.values('llm_config__name')
-        .annotate(call_count=Count('id'))
-        .order_by('-call_count')[:10]
+    # 2. 模型使用及成本统计 (基于 ModelUsage)
+    llm_summary = ModelUsage.objects.aggregate(
+        total_tokens=Sum('total_tokens'),
+        total_cost=Sum('cost'),
+        avg_latency=Avg('latency_ms')
     )
 
-    # 用户活跃度 (近 30 天每日操作数)
-    from django.utils import timezone
-    from datetime import timedelta
-    thirty_days_ago = timezone.now() - timedelta(days=30)
-    daily_active = list(
+    # 模型调用排行 (按 Token 消耗)
+    llm_usage_ranking = list(
+        ModelUsage.objects.values('llm_config__name')
+        .annotate(
+            tokens=Sum('total_tokens'),
+            cost=Sum('cost'),
+            calls=Count('id')
+        )
+        .order_by('-tokens')[:10]
+    )
+
+    # 3. 趋势统计 (近 30 天)
+    daily_stats = list(
+        ModelUsage.objects.filter(created_at__gte=thirty_days_ago)
+        .annotate(date=TruncDate('created_at'))
+        .values('date')
+        .annotate(
+            tokens=Sum('total_tokens'),
+            cost=Sum('cost'),
+            calls=Count('id')
+        )
+        .order_by('date')
+    )
+
+    # 4. 用户活跃度
+    user_activity = list(
         OperationLog.objects.filter(created_at__gte=thirty_days_ago)
         .annotate(date=TruncDate('created_at'))
         .values('date')
@@ -62,10 +89,18 @@ def get_dashboard_stats() -> dict:
     )
 
     return {
-        "total_tasks": total_tasks,
-        "type_stats": type_stats,
-        "llm_call_ranking": llm_stats,
-        "daily_active_ops": daily_active,
+        "summary": {
+            "total_research_tasks": total_tasks,
+            "total_tokens_consumed": llm_summary['total_tokens'] or 0,
+            "total_cost_yuan": float(llm_summary['total_cost'] or 0),
+            "avg_latency_ms": round(llm_summary['avg_latency'] or 0, 2)
+        },
+        "type_distribution": type_stats,
+        "llm_usage_ranking": llm_usage_ranking,
+        "trends": {
+            "daily_llm_usage": daily_stats,
+            "daily_active_ops": user_activity
+        }
     }
 
 
@@ -183,3 +218,29 @@ def list_alerts(user_id: int) -> List[dict]:
         'id', 'object_type', 'object_name', 'condition',
         'is_active', 'last_triggered_at', 'created_at'
     ))
+
+
+def get_cost_report(start_date: str = None, end_date: str = None) -> List[dict]:
+    """获取成本审计报表 (按用户维度)
+    
+    FR-SJGL-0005: 成本审计 (Token 消耗流水、分用户成本报表)
+    """
+    from django.db.models import Sum, Count
+    from llm_manager.models.model_usage import ModelUsage
+
+    query = ModelUsage.objects.all()
+    if start_date:
+        query = query.filter(created_at__date__gte=start_date)
+    if end_date:
+        query = query.filter(created_at__date__lte=end_date)
+
+    report = list(
+        query.values('user__username', 'user__id')
+        .annotate(
+            total_tokens=Sum('total_tokens'),
+            total_cost=Sum('cost'),
+            total_calls=Count('id')
+        )
+        .order_by('-total_cost')
+    )
+    return report
