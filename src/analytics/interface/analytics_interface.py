@@ -108,6 +108,75 @@ def create_alert(user_id: int, object_type: str, object_name: str,
     return alert.id
 
 
+from analytics.models.personalization import Favorite, Alert, UserMessage
+
+
+def create_user_message(user_id: int, title: str, content: str, 
+                        msg_type: str = 'ALERT', alert_id: int = None) -> int:
+    """创建一条站内消息"""
+    msg = UserMessage.objects.create(
+        user_id=user_id,
+        title=title,
+        content=content,
+        message_type=msg_type,
+        source_alert_id=alert_id
+    )
+    return msg.id
+
+
+def list_user_messages(user_id: int, only_unread: bool = False) -> List[dict]:
+    """获取用户的站内消息列表"""
+    query = UserMessage.objects.filter(user_id=user_id)
+    if only_unread:
+        query = query.filter(is_read=False)
+    
+    return list(query.values(
+        'id', 'title', 'content', 'message_type', 
+        'is_read', 'created_at'
+    ))
+
+
+def mark_messages_as_read(user_id: int, message_ids: List[int] = None) -> int:
+    """标记消息为已读"""
+    query = UserMessage.objects.filter(user_id=user_id, is_read=False)
+    if message_ids:
+        query = query.filter(id__in=message_ids)
+    
+    count = query.update(is_read=True)
+    return count
+
+
+def check_and_dispatch_alerts(object_type: str, object_name: str, 
+                              info_title: str, info_id: int):
+    """(核心) 检查新内容是否匹配任何用户的订阅提醒
+    
+    当系统抓取到新信息(ScrapedContent)或生成新报告时触发。
+    """
+    # 查找匹配的活跃提醒设置
+    matched_alerts = Alert.objects.filter(
+        object_type=object_type,
+        object_name__icontains=object_name,
+        is_active=True
+    ).select_related('user')
+
+    for alert in matched_alerts:
+        # 生成通知消息
+        msg_title = f"您关注的{alert.get_object_type_display()} [{alert.object_name}] 有更新"
+        msg_content = f"系统检测到新信息: {info_title}。点击查看详情。"
+        
+        create_user_message(
+            user_id=alert.user.id,
+            title=msg_title,
+            content=msg_content,
+            alert_id=alert.id
+        )
+        
+        # 更新触发时间
+        from django.utils import timezone
+        alert.last_triggered_at = timezone.now()
+        alert.save()
+
+
 def list_alerts(user_id: int) -> List[dict]:
     """获取用户提醒列表"""
     return list(Alert.objects.filter(user_id=user_id).values(
