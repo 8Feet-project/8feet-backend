@@ -82,3 +82,40 @@ class Alert(models.Model):
         db_table = 'alert_setting'
         verbose_name = '推送提醒设置'
         verbose_name_plural = verbose_name
+
+
+class UserMessage(models.Model):
+    """站内消息中心记录
+    
+    FR-GRXX-0004: 动态更新提醒的消息存储载体。
+    """
+    MESSAGE_TYPE_CHOICES = [
+        ('ALERT', '提醒消息'),
+        ('SYSTEM', '系统通知'),
+        ('TASK', '任务状态'),
+    ]
+
+    user = models.ForeignKey(
+        get_user_model(), on_delete=models.CASCADE,
+        related_name='messages'
+    )
+    title = models.CharField(max_length=256)
+    content = models.TextField()
+    message_type = models.CharField(
+        max_length=16, choices=MESSAGE_TYPE_CHOICES, default='ALERT'
+    )
+    source_alert = models.ForeignKey(
+        Alert, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='triggered_messages'
+    )
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'user_message'
+        verbose_name = '站内消息'
+        verbose_name_plural = verbose_name
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"[{'已读' if self.is_read else '未读'}] {self.title}"

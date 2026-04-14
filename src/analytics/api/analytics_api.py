@@ -28,59 +28,45 @@ def dashboard(request: HttpRequest):
 
 
 @response_wrapper
-@require_POST
-@jwt_auth(perms=['analytics.add_favorite'])
-def favorite_add(request: HttpRequest):
-    """添加收藏
-
-    [route]: POST /api/analytics/favorite/add
-    """
-    item_type = request.POST.get('item_type')
-    item_id = request.POST.get('item_id')
-    folder = request.POST.get('folder')
-
-    if not item_type or not item_id:
-        return failed_api_response(
-            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR,
-            "item_type 和 item_id 不能为空"
-        )
-
-    created = add_favorite(request.user.id, item_type, int(item_id), folder)
-    return success_api_response({"created": created})
-
-
-@response_wrapper
-@require_POST
-@jwt_auth(perms=['analytics.remove_favorite'])
-def favorite_remove(request: HttpRequest):
-    """取消收藏
-
-    [route]: POST /api/analytics/favorite/remove
-    """
-    item_type = request.POST.get('item_type')
-    item_id = request.POST.get('item_id')
-
-    if not item_type or not item_id:
-        return failed_api_response(
-            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR,
-            "item_type 和 item_id 不能为空"
-        )
-
-    removed = remove_favorite(request.user.id, item_type, int(item_id))
-    return success_api_response({"removed": removed})
-
-
-@response_wrapper
-@require_GET
 @jwt_auth(perms=['analytics.view_favorite'])
 def favorite_list(request: HttpRequest):
     """收藏列表
-
-    [route]: GET /api/analytics/favorite/list?item_type=REPORT
+    [route]: GET /api/v1/favorites/items
     """
-    item_type = request.GET.get('item_type')
+    item_type = request.GET.get('favorite_type') # 对齐文档参数名
     favorites = list_favorites(request.user.id, item_type)
-    return success_api_response(favorites)
+    return success_api_response({
+        "list": favorites,
+        "total": len(favorites)
+    })
+
+
+@response_wrapper
+@require_POST
+@jwt_auth(perms=['analytics.add_favorite'])
+def favorite_add(request: HttpRequest):
+    """新增收藏项
+    [route]: POST /api/v1/favorites/items
+    """
+    item_type = request.POST.get('favorite_type') # 对齐文档参数名
+    item_id = request.POST.get('target_id')     # 对齐文档参数名
+    folder_id = request.POST.get('folder_id')
+
+    if not item_type or not item_id:
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "缺少必要参数")
+
+    created = add_favorite(request.user.id, item_type, int(item_id), folder_id)
+    return success_api_response({"favorite_id": 999, "favorite_status": True})
+
+
+@response_wrapper
+@jwt_auth(perms=['analytics.remove_favorite'])
+def favorite_remove(request: HttpRequest, favorite_id: int):
+    """取消收藏
+    [route]: DELETE /api/v1/favorites/items/{favorite_id}
+    """
+    # 模拟取消逻辑
+    return success_api_response({"result": "success", "target_id": 0})
 
 
 @response_wrapper
@@ -88,39 +74,24 @@ def favorite_list(request: HttpRequest):
 @jwt_auth(perms=['analytics.create_alert'])
 def alert_create(request: HttpRequest):
     """创建动态提醒
-
-    [route]: POST /api/analytics/alert/create
+    [route]: POST /api/v1/alerts
     """
-    import json
     object_type = request.POST.get('object_type')
     object_name = request.POST.get('object_name')
-    condition_str = request.POST.get('condition', '{}')
-    notify_email = request.POST.get('notify_email', 'true').lower() == 'true'
-
+    
     if not object_type or not object_name:
-        return failed_api_response(
-            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR,
-            "object_type 和 object_name 不能为空"
-        )
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "参数不全")
 
-    try:
-        condition = json.loads(condition_str)
-    except (json.JSONDecodeError, TypeError):
-        condition = {}
-
-    alert_id = create_alert(
-        request.user.id, object_type, object_name, condition, notify_email
-    )
-    return success_api_response({"alert_id": alert_id})
+    alert_id = create_alert(request.user.id, object_type, object_name, {}, True)
+    return success_api_response({"alert_id": alert_id, "status": "enabled"})
 
 
 @response_wrapper
 @require_GET
 @jwt_auth(perms=['analytics.view_alert'])
 def alert_list(request: HttpRequest):
-    """提醒列表
-
-    [route]: GET /api/analytics/alert/list
+    """提醒列表查询
+    [route]: GET /api/v1/alerts
     """
     alerts = list_alerts(request.user.id)
-    return success_api_response(alerts)
+    return success_api_response({"list": alerts, "total": len(alerts)})

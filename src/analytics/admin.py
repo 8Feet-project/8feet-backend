@@ -22,6 +22,9 @@ class LLMCallLogAdmin(admin.ModelAdmin):
     list_filter = ['status']
 
 
+from analytics.models.personalization import Favorite, Alert, UserMessage
+
+
 @admin.register(Favorite)
 class FavoriteAdmin(admin.ModelAdmin):
     list_display = ['user', 'item_type', 'item_id', 'folder', 'created_at']
@@ -32,3 +35,10 @@ class FavoriteAdmin(admin.ModelAdmin):
 class AlertAdmin(admin.ModelAdmin):
     list_display = ['user', 'object_type', 'object_name', 'is_active', 'created_at']
     list_filter = ['object_type', 'is_active']
+
+
+@admin.register(UserMessage)
+class UserMessageAdmin(admin.ModelAdmin):
+    list_display = ['user', 'title', 'message_type', 'is_read', 'created_at']
+    list_filter = ['message_type', 'is_read']
+    search_fields = ['title', 'user__username']
