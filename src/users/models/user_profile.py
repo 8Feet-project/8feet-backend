@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 ROLE_SUPER_ADMIN = 'super_admin'
 ROLE_ADMIN = 'admin'
 ROLE_USER = 'user'
+ROLE_NORMAL = ROLE_USER
 ROLE_CHOICES = [
     (ROLE_SUPER_ADMIN, '超级管理员'),
     (ROLE_ADMIN, '管理员'),
