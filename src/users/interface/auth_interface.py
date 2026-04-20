@@ -7,6 +7,7 @@ from typing import Tuple, Optional, Dict, Any, List
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
+from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
 
@@ -194,8 +195,27 @@ def send_verification_email(email: str, scene: str) -> Tuple[bool, int]:
     cache_key = f"email_code_{scene}_{email}"
     cache.set(cache_key, code, expire_in)
     
-    # TODO: 待补全发送邮件逻辑
-    print(f"Sending email to {email} with code: {code} for scene: {scene}")
+    # 补全发送邮件逻辑
+    subject = "【8Feet】验证码"
+    scene_map = {
+        'register': '注册',
+        'bind': '绑定邮箱',
+        'reset_password': '重置密码'
+    }
+    action_name = scene_map.get(scene, '安全校验')
+    message = f"您正在进行{action_name}操作，验证码为：{code}。有效期5分钟，请勿泄露给他人。"
+    
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception as e:
+        print(f"Failed to send verification email to {email}: {str(e)}")
+        # 生产环境下应使用 logger.error
     
     return True, expire_in
 
@@ -245,8 +265,20 @@ def request_password_reset(username_or_email: str) -> Tuple[bool, str]:
     reset_token = ''.join(random.choices(string.ascii_letters + string.digits, k=32))
     cache.set(f"password_reset_{reset_token}", user.id, 1800) # 30分钟有效
     
-    # TODO: 待补全发送邮件逻辑
-    print(f"Sending password reset token {reset_token} to {user.email}")
+    # 补全发送邮件逻辑
+    subject = "【8Feet】密码重置请求"
+    message = f"您请求重置 8Feet 账户的密码。您的重置令牌为：{reset_token}\n请在 30 分钟内完成操作。如果您没有发起此请求，请忽略。"
+    
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except Exception as e:
+        print(f"Failed to send password reset email to {user.email}: {str(e)}")
     
     return True, "验证邮件已发送"
 
