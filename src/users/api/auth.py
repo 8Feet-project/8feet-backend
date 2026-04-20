@@ -16,7 +16,7 @@ from shared.utils import (
 )
 from users.interface.auth_interface import (
     authenticate_by_username, authenticate_by_email, refresh_access_token, register_user,
-    send_verification_email, verify_email_code, request_password_reset,
+    send_verification_email, verify_email_code, verify_email_code_for_scene, request_password_reset,
     confirm_password_reset, update_user_profile, change_user_password, blacklist_token
 )
 
@@ -35,16 +35,25 @@ def register(request: HttpRequest):
 
     username = data.get('username')
     nickname = data.get('nickname')
+    if not nickname:
+        nickname = username
     password = data.get('password')
     email = data.get('email')
     phone = data.get('phone')
     invite_code = data.get('invite_code')
+    email_code = data.get('email_code')
 
-    if not all([username, nickname, password, email]):
+    if not all([username, password, email, email_code]):
         return failed_api_response(
-            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "用户名、昵称、密码和邮箱不能为空")
+            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "用户名、密码、邮箱和邮箱验证码不能为空")
 
-    success, message, result = register_user(username, nickname, password, email, phone, invite_code)
+    if not verify_email_code_for_scene(email, email_code, 'register'):
+        return failed_api_response(
+            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "邮箱验证码错误或已过期")
+
+    success, message, result = register_user(
+        username, nickname, password, email, phone, invite_code, email_verified=True
+    )
     if not success:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
 
@@ -53,9 +62,9 @@ def register(request: HttpRequest):
 
 @response_wrapper
 @require_POST
-def login_by_username(request: HttpRequest):
-    """用户名登录
-    [route]: POST /api/v1/auth/login/username
+def login(request: HttpRequest):
+    """统一登录
+    [route]: POST /api/v1/auth/login
     """
     import json
     try:
@@ -63,40 +72,30 @@ def login_by_username(request: HttpRequest):
     except:
         data = request.POST
 
+    login_type = data.get('login_type')
     username = data.get('username')
-    password = data.get('password')
-
-    if not username or not password:
-        return failed_api_response(
-            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "用户名和密码不能为空")
-
-    success, message, result = authenticate_by_username(username, password)
-    if not success:
-        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
-
-    return success_api_response(result)
-
-
-@response_wrapper
-@require_POST
-def login_by_email(request: HttpRequest):
-    """邮箱登录
-    [route]: POST /api/v1/auth/login/email
-    """
-    import json
-    try:
-        data = json.loads(request.body)
-    except:
-        data = request.POST
-
     email = data.get('email')
     password = data.get('password')
 
-    if not email or not password:
+    if login_type not in ('username', 'email'):
         return failed_api_response(
-            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "邮箱和密码不能为空")
+            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "login_type 仅支持 username 或 email")
 
-    success, message, result = authenticate_by_email(email, password)
+    if not password:
+        return failed_api_response(
+            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "密码不能为空")
+
+    if login_type == 'username':
+        if not username or email:
+            return failed_api_response(
+                ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "username 登录时必须传 username，且不能传 email")
+        success, message, result = authenticate_by_username(username, password)
+    else:
+        if not email or username:
+            return failed_api_response(
+                ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "email 登录时必须传 email，且不能传 username")
+        success, message, result = authenticate_by_email(email, password)
+
     if not success:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
 
