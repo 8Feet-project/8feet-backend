@@ -37,7 +37,9 @@ def initialize(request):
         nickname = "SUPERADMIN"
         
         from users.interface.auth_interface import register_user
-        success, message, result = register_user(username, nickname, password, email)
+        success, message, result = register_user(
+            username, nickname, password, email, email_verified=True
+        )
         
         
         if not success:

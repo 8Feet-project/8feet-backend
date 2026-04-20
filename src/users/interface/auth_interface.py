@@ -64,7 +64,15 @@ def get_token_dict(user) -> Dict[str, Any]:
     }
 
 
-def register_user(username: str, nickname: str, password: str, email: str, phone: str = None, invite_code: str = None) -> Tuple[bool, str, Optional[Dict]]:
+def register_user(
+    username: str,
+    nickname: str,
+    password: str,
+    email: str,
+    phone: str = None,
+    invite_code: str = None,
+    email_verified: bool = False,
+) -> Tuple[bool, str, Optional[Dict]]:
     """用户注册逻辑"""
     User = get_user_model()
     if User.objects.filter(username=username).exists():
@@ -82,7 +90,7 @@ def register_user(username: str, nickname: str, password: str, email: str, phone
                 username=username,
                 password=password,
                 email=email,
-                first_name=nickname  # 默认将 nickname 存入 first_name 保证 Django 兼容性
+                first_name=username  # 默认将 nickname 存入 first_name 保证 Django 兼容性
             )
             
             # 创建 Profile
@@ -90,7 +98,8 @@ def register_user(username: str, nickname: str, password: str, email: str, phone
                 user=user,
                 phone=phone,
                 role=role,
-                nickname=nickname
+                nickname=nickname,
+                email_verified=email_verified,
             )
             
             data = {
@@ -201,6 +210,21 @@ def verify_email_code(email: str, code: str) -> bool:
             cache.delete(cache_key)
             return True
     return False
+
+
+def verify_email_code_for_scene(email: str, code: str, scene: str, consume: bool = True) -> bool:
+    """按场景验证邮箱验证码。
+
+    注册流程需要只校验 register 场景，避免其他场景验证码被误用。
+    """
+    cache_key = f"email_code_{scene}_{email}"
+    saved_code = cache.get(cache_key)
+    if not saved_code or saved_code != code:
+        return False
+
+    if consume:
+        cache.delete(cache_key)
+    return True
 
 
 def request_password_reset(username_or_email: str) -> Tuple[bool, str]:
