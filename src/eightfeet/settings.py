@@ -349,6 +349,36 @@ MAIL_SMTP_FROM = _env('SMTP_FROM', _YAML_CONFIG.get('SmtpFrom', ''))
 MAIL_SMTP_PASSWORD = _env('SMTP_PASSWORD', _YAML_CONFIG.get('SmtpPassword', ''))
 MAIL_SMTP_HOST = _env('SMTP_HOST', _YAML_CONFIG.get('SmtpHost', ''))
 MAIL_SMTP_PORT = _to_int(_env('SMTP_PORT', _YAML_CONFIG.get('SmtpPort', 465)), 465)
+smtp_use_ssl_env = _env('SMTP_USE_SSL')
+smtp_use_tls_env = _env('SMTP_USE_TLS')
+MAIL_SMTP_USE_SSL = _to_bool(
+    smtp_use_ssl_env,
+    _YAML_CONFIG.get('SmtpUseSsl', MAIL_SMTP_PORT == 465),
+)
+MAIL_SMTP_USE_TLS = _to_bool(
+    smtp_use_tls_env,
+    _YAML_CONFIG.get('SmtpUseTls', MAIL_SMTP_PORT == 587),
+)
+MAIL_SMTP_TIMEOUT = _to_int(_env('SMTP_TIMEOUT', _YAML_CONFIG.get('SmtpTimeout', 15)), 15)
+MAIL_SMTP_USE_LOCALTIME = _to_bool(
+    _env('SMTP_USE_LOCALTIME', _YAML_CONFIG.get('SmtpUseLocaltime', True)),
+    True,
+)
+
+if MAIL_SMTP_USE_SSL and MAIL_SMTP_USE_TLS:
+    raise ValueError('SMTP_USE_SSL / SmtpUseSsl 与 SMTP_USE_TLS / SmtpUseTls 不能同时为 true')
+
+# Django 标准邮件配置
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = MAIL_SMTP_HOST
+EMAIL_PORT = MAIL_SMTP_PORT
+EMAIL_HOST_USER = MAIL_SMTP_USERNAME
+EMAIL_HOST_PASSWORD = MAIL_SMTP_PASSWORD
+EMAIL_USE_SSL = MAIL_SMTP_USE_SSL
+EMAIL_USE_TLS = MAIL_SMTP_USE_TLS
+EMAIL_TIMEOUT = MAIL_SMTP_TIMEOUT
+EMAIL_USE_LOCALTIME = MAIL_SMTP_USE_LOCALTIME
+DEFAULT_FROM_EMAIL = MAIL_SMTP_FROM or MAIL_SMTP_USERNAME
 
 # ============================================================
 # 日志（结构化输出 + 按天轮转）

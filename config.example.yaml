@@ -51,11 +51,20 @@ S3BucketReports: eightfeet-reports
 S3UseSSL: false
 
 # Mail (optional)
-SmtpUsername: ""
-SmtpFrom: ""
-SmtpPassword: ""
-SmtpHost: ""
+# 常见配置:
+# 1. SMTPS 直连: SmtpPort=465, SmtpUseSsl=true, SmtpUseTls=false
+# 2. STARTTLS: SmtpPort=587, SmtpUseSsl=false, SmtpUseTls=true
+# 3. 大多数服务商要求 SmtpPassword 使用 SMTP 授权码，而不是邮箱登录密码
+# 4. SmtpFrom 建议与 SmtpUsername 保持一致，避免被服务商拒收
+SmtpHost: "smtp.qq.com"
 SmtpPort: 465
+SmtpUsername: ""
+SmtpPassword: ""
+SmtpFrom: ""
+SmtpUseSsl: true
+SmtpUseTls: false
+SmtpTimeout: 15
+SmtpUseLocaltime: true
 
 # Static files
 StaticRoot: "/var/www/8feet/staticfiles"
