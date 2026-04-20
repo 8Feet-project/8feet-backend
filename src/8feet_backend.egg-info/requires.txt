@@ -1,0 +1,16 @@
+Django
+psycopg2-binary
+pylint
+pylint-django
+pillow
+requests
+pandas
+PyJWT
+django-redis
+PyYAML
+minio
+django-cors-headers
+python-dotenv
+channels
+channels-redis
+daphne

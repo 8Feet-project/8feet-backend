@@ -8,6 +8,7 @@
 - @jwt_auth(): 需要认证的接口
 """
 from django.http import HttpRequest
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from shared.utils import (
@@ -21,6 +22,7 @@ from users.interface.auth_interface import (
 )
 
 
+@csrf_exempt
 @response_wrapper
 @require_POST
 def register(request: HttpRequest):
@@ -60,6 +62,7 @@ def register(request: HttpRequest):
     return success_api_response(result)
 
 
+@csrf_exempt
 @response_wrapper
 @require_POST
 def login(request: HttpRequest):
@@ -102,6 +105,60 @@ def login(request: HttpRequest):
     return success_api_response(result)
 
 
+@csrf_exempt
+@response_wrapper
+@require_POST
+def login_by_username(request: HttpRequest):
+    """用户名登录
+    [route]: POST /api/v1/auth/login/username
+    """
+    import json
+    try:
+        data = json.loads(request.body)
+    except:
+        data = request.POST
+
+    username = data.get('username')
+    password = data.get('password')
+
+    if not username or not password:
+        return failed_api_response(
+            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "用户名和密码不能为空")
+
+    success, message, result = authenticate_by_username(username, password)
+    if not success:
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
+
+    return success_api_response(result)
+
+
+@csrf_exempt
+@response_wrapper
+@require_POST
+def login_by_email(request: HttpRequest):
+    """邮箱登录
+    [route]: POST /api/v1/auth/login/email
+    """
+    import json
+    try:
+        data = json.loads(request.body)
+    except:
+        data = request.POST
+
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return failed_api_response(
+            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "邮箱和密码不能为空")
+
+    success, message, result = authenticate_by_email(email, password)
+    if not success:
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
+
+    return success_api_response(result)
+
+
 @response_wrapper
 @require_POST
 @jwt_auth()
@@ -114,6 +171,7 @@ def logout(request: HttpRequest):
     return success_api_response({"result": "success"})
 
 
+@csrf_exempt
 @response_wrapper
 @require_POST
 def refresh_token(request: HttpRequest):
@@ -129,7 +187,7 @@ def refresh_token(request: HttpRequest):
     refresh_token_str = data.get('refresh_token')
     if not refresh_token_str:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "缺少 refresh_token")
-    
+
     success, message, tokens = refresh_access_token(refresh_token_str)
     if not success:
         return failed_api_response(ErrorCode.UNAUTHORIZED, message)
@@ -137,6 +195,7 @@ def refresh_token(request: HttpRequest):
     return success_api_response(tokens)
 
 
+@csrf_exempt
 @response_wrapper
 @require_POST
 def send_email_code(request: HttpRequest):
@@ -149,7 +208,7 @@ def send_email_code(request: HttpRequest):
 
     email = data.get('email')
     scene = data.get('scene', 'register')
-    
+
     if not email:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "邮箱不能为空")
 
@@ -157,6 +216,7 @@ def send_email_code(request: HttpRequest):
     return success_api_response({"result": "success", "expire_in": expire_in})
 
 
+@csrf_exempt
 @response_wrapper
 @require_POST
 def verify_email(request: HttpRequest):
@@ -169,7 +229,7 @@ def verify_email(request: HttpRequest):
 
     email = data.get('email')
     code = data.get('code')
-    
+
     if not email or not code:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "邮箱和验证码不能为空")
 
@@ -177,6 +237,7 @@ def verify_email(request: HttpRequest):
     return success_api_response({"verified": verified})
 
 
+@csrf_exempt
 @response_wrapper
 @require_POST
 def reset_password_request(request: HttpRequest):
@@ -194,10 +255,11 @@ def reset_password_request(request: HttpRequest):
     success, message = request_password_reset(username)
     if not success:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
-        
+
     return success_api_response({"result": "success", "message": message})
 
 
+@csrf_exempt
 @response_wrapper
 @require_POST
 def reset_password_confirm(request: HttpRequest):
@@ -210,7 +272,7 @@ def reset_password_confirm(request: HttpRequest):
 
     reset_token = data.get('reset_token')
     new_password = data.get('new_password')
-    
+
     if not reset_token or not new_password:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "重置令牌和新密码不能为空")
 
@@ -249,11 +311,11 @@ def get_profile(request: HttpRequest):
             data = json.loads(request.body)
         except:
             data = {}
-            
+
         success, message, updated_fields = update_user_profile(user, data)
         if not success:
             return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
-            
+
         return success_api_response({
             "user_id": user.id,
             "updated_fields": updated_fields
@@ -271,11 +333,11 @@ def update_profile(request: HttpRequest):
         data = json.loads(request.body)
     except:
         data = {}
-        
+
     success, message, updated_fields = update_user_profile(request.user, data)
     if not success:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
-        
+
     return success_api_response({
         "user_id": request.user.id,
         "updated_fields": updated_fields
@@ -295,10 +357,10 @@ def change_password(request: HttpRequest):
         data = json.loads(request.body)
     except:
         data = {}
-        
+
     old_password = data.get('old_password')
     new_password = data.get('new_password')
-    
+
     if not old_password or not new_password:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "旧密码和新密码不能为空")
 

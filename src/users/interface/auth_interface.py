@@ -4,6 +4,8 @@ import string
 from datetime import timedelta
 from typing import Tuple, Optional, Dict, Any, List
 
+from redis.exceptions import ConnectionError as RedisConnectionError
+
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
@@ -13,6 +15,49 @@ from django.utils import timezone
 
 from users.models.auth_record import AuthRecord
 from users.models.user_profile import UserProfile, ROLE_SUPER_ADMIN, ROLE_USER
+
+
+_LOCAL_CACHE_STORE: Dict[str, Tuple[str, Any]] = {}
+
+
+def _cache_set_with_fallback(key: str, value: Any, timeout: int):
+    expire_at = timezone.now() + timedelta(seconds=timeout)
+    try:
+        cache.set(key, value, timeout)
+    except Exception as exc:
+        if isinstance(exc, RedisConnectionError) or 'Redis' in exc.__class__.__name__:
+            _LOCAL_CACHE_STORE[key] = (value, expire_at)
+        else:
+            raise
+
+
+def _cache_get_with_fallback(key: str):
+    try:
+        value = cache.get(key)
+        if value is not None:
+            return value
+    except Exception as exc:
+        if not (isinstance(exc, RedisConnectionError) or 'Redis' in exc.__class__.__name__):
+            raise
+
+    item = _LOCAL_CACHE_STORE.get(key)
+    if not item:
+        return None
+
+    value, expire_at = item
+    if timezone.now() >= expire_at:
+        _LOCAL_CACHE_STORE.pop(key, None)
+        return None
+    return value
+
+
+def _cache_delete_with_fallback(key: str):
+    try:
+        cache.delete(key)
+    except Exception as exc:
+        if not (isinstance(exc, RedisConnectionError) or 'Redis' in exc.__class__.__name__):
+            raise
+    _LOCAL_CACHE_STORE.pop(key, None)
 
 
 def generate_access_token(user_id: int, access_token_delta: int = 3) -> str:
@@ -193,7 +238,7 @@ def send_verification_email(email: str, scene: str) -> Tuple[bool, int]:
     expire_in = 300 # 5分钟
     
     cache_key = f"email_code_{scene}_{email}"
-    cache.set(cache_key, code, expire_in)
+    _cache_set_with_fallback(cache_key, code, expire_in)
     
     # 补全发送邮件逻辑
     subject = "【8Feet】验证码"
@@ -225,9 +270,9 @@ def verify_email_code(email: str, code: str) -> bool:
     # 尝试多种可能的场景
     for scene in ['register', 'bind', 'reset_password']:
         cache_key = f"email_code_{scene}_{email}"
-        saved_code = cache.get(cache_key)
+        saved_code = _cache_get_with_fallback(cache_key)
         if saved_code and saved_code == code:
-            cache.delete(cache_key)
+            _cache_delete_with_fallback(cache_key)
             return True
     return False
 
@@ -263,7 +308,7 @@ def request_password_reset(username_or_email: str) -> Tuple[bool, str]:
     
     # 生成重置令牌
     reset_token = ''.join(random.choices(string.ascii_letters + string.digits, k=32))
-    cache.set(f"password_reset_{reset_token}", user.id, 1800) # 30分钟有效
+    _cache_set_with_fallback(f"password_reset_{reset_token}", user.id, 1800) # 30分钟有效
     
     # 补全发送邮件逻辑
     subject = "【8Feet】密码重置请求"

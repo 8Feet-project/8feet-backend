@@ -1,0 +1,8 @@
+analytics
+eightfeet
+llm_manager
+manage
+reports
+research
+shared
+users

@@ -91,6 +91,11 @@ ALLOWED_HOSTS = _to_list(
 CSRF_TRUSTED_ORIGINS = _to_list(
     _env('DJANGO_CSRF_TRUSTED_ORIGINS', _YAML_CONFIG.get('CsrfTrustedOrigins', []))
 )
+if DEBUG:
+    _dev_csrf_origins = ['http://127.0.0.1:5173', 'http://localhost:5173']
+    for _origin in _dev_csrf_origins:
+        if _origin not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(_origin)
 
 # ============================================================
 # 应用注册
@@ -125,6 +130,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+APPEND_SLASH = False
 
 CORS_ALLOW_ALL_ORIGINS = _to_bool(
     _env('CORS_ALLOW_ALL_ORIGINS', _YAML_CONFIG.get('CorsAllowAllOrigins', DEBUG)),
@@ -133,6 +139,23 @@ CORS_ALLOW_ALL_ORIGINS = _to_bool(
 CORS_ALLOWED_ORIGINS = _to_list(
     _env('CORS_ALLOWED_ORIGINS', _YAML_CONFIG.get('CorsAllowedOrigins', []))
 )
+if DEBUG:
+    _dev_origins = ['http://127.0.0.1:5173', 'http://localhost:5173']
+    for _origin in _dev_origins:
+        if _origin not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(_origin)
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
+CORS_ALLOW_METHODS = ['DELETE', 'GET', 'OPTIONS', 'PATCH', 'POST', 'PUT']
 CORS_EXPOSE_HEADERS = ['Content-Disposition', 'Date']
 
 # ============================================================
@@ -162,22 +185,32 @@ ASGI_APPLICATION = 'eightfeet.asgi.application'
 # ============================================================
 # 数据库
 # ============================================================
+DB_ENGINE = _env('DB_ENGINE', '').strip().lower()
 DB_HOST = _env('DB_HOST', _YAML_CONFIG.get('DatabaseHost', 'localhost'))
 DB_PORT = _to_int(_env('DB_PORT', _YAML_CONFIG.get('DatabasePort', 5432)), 5432)
 DB_USER = _env('DB_USER', _YAML_CONFIG.get('DatabaseUser', 'admin'))
 DB_PASSWORD = _env('DB_PASSWORD', _YAML_CONFIG.get('DatabasePassword', ''))
 DB_NAME = _env('DB_NAME', _YAML_CONFIG.get('DatabaseName', 'eightfeet'))
+SQLITE_NAME = _env('SQLITE_NAME', os.path.join(_PROJECT_ROOT, 'db.sqlite3'))
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': DB_NAME,
-        'USER': DB_USER,
-        'PASSWORD': DB_PASSWORD,
-        'HOST': DB_HOST,
-        'PORT': DB_PORT,
+if DB_ENGINE in {'sqlite', 'sqlite3'}:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': SQLITE_NAME,
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': DB_NAME,
+            'USER': DB_USER,
+            'PASSWORD': DB_PASSWORD,
+            'HOST': DB_HOST,
+            'PORT': DB_PORT,
+        }
+    }
 
 # ============================================================
 # 密码验证
@@ -210,10 +243,78 @@ STATIC_ROOT = _env('STATIC_ROOT', _YAML_CONFIG.get('StaticRoot', '/var/www/8feet
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 
-SESSION_COOKIE_SECURE = _to_bool(
-    _env('SESSION_COOKIE_SECURE', _YAML_CONFIG.get('SessionCookieSecure', not DEBUG)),
-    not DEBUG,
-)
+if DEBUG:
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    CSRF_COOKIE_DOMAIN = None
+    CSRF_COOKIE_HTTPONLY = False
+    CSRF_COOKIE_SAMESITE = 'Lax'
+    CSRF_USE_SESSIONS = False
+
+    SECURE_SSL_REDIRECT = False
+    SECURE_HSTS_SECONDS = 0
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_PRELOAD = False
+    SECURE_CONTENT_TYPE_NOSNIFF = False
+    SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
+    X_FRAME_OPTIONS = 'DENY'
+else:
+    SESSION_COOKIE_SECURE = _to_bool(
+        _env('SESSION_COOKIE_SECURE', _YAML_CONFIG.get('SessionCookieSecure', not DEBUG)),
+        not DEBUG,
+    )
+    CSRF_COOKIE_SECURE = _to_bool(
+        _env('CSRF_COOKIE_SECURE', _YAML_CONFIG.get('CsrfCookieSecure', not DEBUG)),
+        not DEBUG,
+    )
+    CSRF_COOKIE_DOMAIN = _env('CSRF_COOKIE_DOMAIN', _YAML_CONFIG.get('CsrfCookieDomain'))
+    if CSRF_COOKIE_DOMAIN == '':
+        CSRF_COOKIE_DOMAIN = None
+    CSRF_COOKIE_HTTPONLY = _to_bool(
+        _env('CSRF_COOKIE_HTTPONLY', _YAML_CONFIG.get('CsrfCookieHttpOnly', False)),
+        False,
+    )
+    CSRF_COOKIE_SAMESITE = _env(
+        'CSRF_COOKIE_SAMESITE',
+        _YAML_CONFIG.get('CsrfCookieSameSite', 'Lax'),
+    )
+    CSRF_USE_SESSIONS = _to_bool(
+        _env('CSRF_USE_SESSIONS', _YAML_CONFIG.get('CsrfUseSessions', False)),
+        False,
+    )
+
+    SECURE_SSL_REDIRECT = _to_bool(
+        _env('SECURE_SSL_REDIRECT', _YAML_CONFIG.get('SecureSSLRedirect', not DEBUG)),
+        not DEBUG,
+    )
+    SECURE_HSTS_SECONDS = _to_int(
+        _env('SECURE_HSTS_SECONDS', _YAML_CONFIG.get('SecureHstsSeconds', 31536000 if not DEBUG else 0)),
+        31536000 if not DEBUG else 0,
+    )
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = _to_bool(
+        _env(
+            'SECURE_HSTS_INCLUDE_SUBDOMAINS',
+            _YAML_CONFIG.get('SecureHstsIncludeSubdomains', not DEBUG),
+        ),
+        not DEBUG,
+    )
+    SECURE_HSTS_PRELOAD = _to_bool(
+        _env('SECURE_HSTS_PRELOAD', _YAML_CONFIG.get('SecureHstsPreload', not DEBUG)),
+        not DEBUG,
+    )
+    SECURE_CONTENT_TYPE_NOSNIFF = _to_bool(
+        _env('SECURE_CONTENT_TYPE_NOSNIFF', _YAML_CONFIG.get('SecureContentTypeNosniff', not DEBUG)),
+        not DEBUG,
+    )
+    SECURE_REFERRER_POLICY = _env(
+        'SECURE_REFERRER_POLICY',
+        _YAML_CONFIG.get('SecureReferrerPolicy', 'strict-origin-when-cross-origin'),
+    )
+    X_FRAME_OPTIONS = _env(
+        'X_FRAME_OPTIONS',
+        _YAML_CONFIG.get('XFrameOptions', 'DENY'),
+    )
+
 SESSION_COOKIE_HTTPONLY = _to_bool(
     _env('SESSION_COOKIE_HTTPONLY', _YAML_CONFIG.get('SessionCookieHttpOnly', True)),
     True,
@@ -221,57 +322,6 @@ SESSION_COOKIE_HTTPONLY = _to_bool(
 SESSION_COOKIE_SAMESITE = _env(
     'SESSION_COOKIE_SAMESITE',
     _YAML_CONFIG.get('SessionCookieSameSite', 'Lax'),
-)
-CSRF_COOKIE_SECURE = _to_bool(
-    _env('CSRF_COOKIE_SECURE', _YAML_CONFIG.get('CsrfCookieSecure', not DEBUG)),
-    not DEBUG,
-)
-CSRF_COOKIE_DOMAIN = _env('CSRF_COOKIE_DOMAIN', _YAML_CONFIG.get('CsrfCookieDomain'))
-if CSRF_COOKIE_DOMAIN == '':
-    CSRF_COOKIE_DOMAIN = None
-CSRF_COOKIE_HTTPONLY = _to_bool(
-    _env('CSRF_COOKIE_HTTPONLY', _YAML_CONFIG.get('CsrfCookieHttpOnly', False)),
-    False,
-)
-CSRF_COOKIE_SAMESITE = _env(
-    'CSRF_COOKIE_SAMESITE',
-    _YAML_CONFIG.get('CsrfCookieSameSite', 'Lax'),
-)
-CSRF_USE_SESSIONS = _to_bool(
-    _env('CSRF_USE_SESSIONS', _YAML_CONFIG.get('CsrfUseSessions', False)),
-    False,
-)
-
-SECURE_SSL_REDIRECT = _to_bool(
-    _env('SECURE_SSL_REDIRECT', _YAML_CONFIG.get('SecureSSLRedirect', not DEBUG)),
-    not DEBUG,
-)
-SECURE_HSTS_SECONDS = _to_int(
-    _env('SECURE_HSTS_SECONDS', _YAML_CONFIG.get('SecureHstsSeconds', 31536000 if not DEBUG else 0)),
-    31536000 if not DEBUG else 0,
-)
-SECURE_HSTS_INCLUDE_SUBDOMAINS = _to_bool(
-    _env(
-        'SECURE_HSTS_INCLUDE_SUBDOMAINS',
-        _YAML_CONFIG.get('SecureHstsIncludeSubdomains', not DEBUG),
-    ),
-    not DEBUG,
-)
-SECURE_HSTS_PRELOAD = _to_bool(
-    _env('SECURE_HSTS_PRELOAD', _YAML_CONFIG.get('SecureHstsPreload', not DEBUG)),
-    not DEBUG,
-)
-SECURE_CONTENT_TYPE_NOSNIFF = _to_bool(
-    _env('SECURE_CONTENT_TYPE_NOSNIFF', _YAML_CONFIG.get('SecureContentTypeNosniff', not DEBUG)),
-    not DEBUG,
-)
-SECURE_REFERRER_POLICY = _env(
-    'SECURE_REFERRER_POLICY',
-    _YAML_CONFIG.get('SecureReferrerPolicy', 'strict-origin-when-cross-origin'),
-)
-X_FRAME_OPTIONS = _env(
-    'X_FRAME_OPTIONS',
-    _YAML_CONFIG.get('XFrameOptions', 'DENY'),
 )
 
 # ============================================================
