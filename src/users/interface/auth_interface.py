@@ -308,21 +308,28 @@ def update_user_profile(user, data: Dict[str, Any]) -> Tuple[bool, str, List[str
         return False, "用户 Profile 不存在", []
     
     updated_fields = []
-    
-    # 允许更新的字段
-    allowed_fields = ['nickname', 'phone', 'avatar_url', 'email']
 
-    for field in allowed_fields:
-        if field == 'email':
-            user.email = data[field]
-            user.save()
-            updated_fields.append(field)
-        elif field in data:
-            setattr(profile, field, data[field])
-            updated_fields.append(field)
-        
-    if updated_fields:
-        profile.save()
+    # 前端资料接口使用 avatar_url，模型实际字段为 avatar。
+    profile_field_map = {
+        'nickname': 'nickname',
+        'phone': 'phone',
+        'avatar_url': 'avatar',
+    }
+    profile_updated_fields = []
+
+    for request_field, model_field in profile_field_map.items():
+        if request_field in data:
+            setattr(profile, model_field, data[request_field])
+            profile_updated_fields.append(model_field)
+            updated_fields.append(request_field)
+
+    if 'email' in data:
+        user.email = data['email']
+        user.save(update_fields=['email'])
+        updated_fields.append('email')
+
+    if profile_updated_fields:
+        profile.save(update_fields=profile_updated_fields)
         
     return True, "更新成功", updated_fields
 
