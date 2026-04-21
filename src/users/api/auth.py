@@ -21,6 +21,23 @@ from users.interface.auth_interface import (
 )
 
 
+def _serialize_current_user(user):
+    """统一当前用户资料返回结构，保持可空字段原样返回。"""
+    profile = getattr(user, 'profile', None)
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "nickname": profile.nickname if profile else user.get_full_name(),
+        "email": user.email,
+        "phone": profile.phone if profile else None,
+        "avatar_url": profile.avatar if profile else None,
+        "role": profile.role if profile else "user",
+        "permissions": list(user.get_all_permissions()),
+        "email_verified": profile.email_verified if profile else False,
+        "last_login_at": user.last_login.isoformat() if user.last_login else None
+    }
+
+
 @response_wrapper
 @require_POST
 def register(request: HttpRequest):
@@ -228,21 +245,9 @@ def get_profile(request: HttpRequest):
     [route]: GET/PATCH /api/v1/users/me
     """
     user = request.user
-    profile = getattr(user, 'profile', None)
 
     if request.method == 'GET':
-        return success_api_response({
-            "user_id": user.id,
-            "username": user.username,
-            "nickname": profile.nickname if profile else user.get_full_name(),
-            "email": user.email,
-            "phone": profile.phone if profile else None,
-            "avatar_url": profile.avatar if profile else None,
-            "role": profile.role if profile else "user",
-            "permissions": list(user.get_all_permissions()),
-            "email_verified": profile.email_verified if profile else False,
-            "last_login_at": user.last_login.isoformat() if user.last_login else None
-        })
+        return success_api_response(_serialize_current_user(user))
     elif request.method == 'PATCH':
         import json
         try:
