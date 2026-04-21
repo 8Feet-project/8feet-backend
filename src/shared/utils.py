@@ -31,11 +31,11 @@ class ErrorCode(Enum):
 # ============================================================
 # 统一响应构造
 # ============================================================
-def success_api_response(data=None):
+def success_api_response(data=None, message="success"):
     """构造成功响应"""
     return {
         "code": ErrorCode.SUCCESS.value,
-        "message": "success",
+        "message": message,
         "data": data
     }
 

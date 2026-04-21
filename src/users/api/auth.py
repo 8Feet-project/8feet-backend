@@ -226,7 +226,7 @@ def reset_password_request(request: HttpRequest):
     if not success:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
         
-    return success_api_response({"result": "success", "message": message})
+    return success_api_response({"result": "success"}, message)
 
 
 @response_wrapper
