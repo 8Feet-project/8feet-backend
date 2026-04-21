@@ -26,18 +26,37 @@ class LLMConfig(models.Model):
     )
     api_key_encrypted = models.CharField(
         max_length=512, null=True, blank=True,
-        help_text="加密存储的 API Key（建议使用环境变量）"
+        help_text="加密存储的 API Key"
+    )
+    # 能力参数
+    context_window = models.PositiveIntegerField(
+        default=4096, help_text="上下文窗口大小 (Tokens)"
+    )
+    max_output_tokens = models.PositiveIntegerField(
+        default=2048, help_text="单次最大输出 Tokens"
+    )
+    # 计费参数 (每 1M Tokens 的价格，单位：元)
+    input_price_1m = models.DecimalField(
+        max_digits=10, decimal_places=4, default=0.0,
+        help_text="输入价格 (每百万 Tokens)"
+    )
+    output_price_1m = models.DecimalField(
+        max_digits=10, decimal_places=4, default=0.0,
+        help_text="输出价格 (每百万 Tokens)"
     )
     params = models.JSONField(
         default=dict,
-        help_text="调用参数: temperature, max_tokens, context_window 等"
+        help_text="其他调用参数: temperature, stop_sequences 等"
     )
     is_enabled = models.BooleanField(
         default=True, help_text="是否启用"
     )
+    is_online = models.BooleanField(
+        default=True, help_text="当前运行状态 (正常/离线)"
+    )
     description = models.TextField(
         null=True, blank=True,
-        help_text="模型推荐使用场景说明"
+        help_text="推荐场景描述"
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
