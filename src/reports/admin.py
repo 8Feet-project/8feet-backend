@@ -1,6 +1,7 @@
 from django.contrib import admin
 from reports.models.report import Report
 from reports.models.citation import Citation, ReportFollowup
+from reports.models.export_record import ReportExportRecord
 
 
 @admin.register(Report)
@@ -18,3 +19,9 @@ class CitationAdmin(admin.ModelAdmin):
 @admin.register(ReportFollowup)
 class ReportFollowupAdmin(admin.ModelAdmin):
     list_display = ['report', 'user', 'question', 'created_at']
+
+
+@admin.register(ReportExportRecord)
+class ReportExportRecordAdmin(admin.ModelAdmin):
+    list_display = ['report', 'export_format', 'report_mode', 'status', 'created_at']
+    list_filter = ['export_format', 'report_mode', 'status']
