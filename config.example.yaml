@@ -43,6 +43,11 @@ ChannelRedisAddress: "localhost:6379"
 ChannelRedisPassword: ""
 ChannelRedisDatabase: 0
 
+# Celery (未配置时回落到 RedisAddress)
+CeleryBrokerUrl: ""
+CeleryResultBackend: ""
+CeleryTaskTimeLimit: 600
+
 # Minio (S3-compatible Object Storage)
 S3SecretId: "CHANGE_ME_MINIO_USER"
 S3SecretKey: "CHANGE_ME_MINIO_PASSWORD"

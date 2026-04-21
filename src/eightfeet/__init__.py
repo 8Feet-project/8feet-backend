@@ -1,3 +1,6 @@
 """
-eightfeet 项目配置中心 — 对标 example-backend 的 trebuchet/
+eightfeet 项目配置中心
 """
+from .celery import app as celery_app
+
+__all__ = ('celery_app',)

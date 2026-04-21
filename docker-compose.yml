@@ -42,6 +42,8 @@ services:
       REDIS_ADDRESS: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DATABASE: ${REDIS_DATABASE:-0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
       CHANNEL_REDIS_ADDRESS: redis:6379
       S3_SECRET_ID: ${S3_SECRET_ID:-minioadmin}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
@@ -60,6 +62,45 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: 8feet-backend:latest
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-CHANGE_ME_IN_PRODUCTION}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-127.0.0.1,localhost}
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-admin}
+      DB_PASSWORD: ${DB_PASSWORD:-password123}
+      DB_NAME: ${DB_NAME:-eightfeet}
+      REDIS_ADDRESS: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DATABASE: ${REDIS_DATABASE:-0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      S3_SECRET_ID: ${S3_SECRET_ID:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ADDRESS: minio:9000
+      S3_BUCKET_REPORTS: ${S3_BUCKET_REPORTS:-eightfeet-reports}
+      S3_USE_SSL: ${S3_USE_SSL:-false}
+      STATIC_ROOT: /var/www/8feet/staticfiles
+      LOG_DIR: /var/log/8feet
+    volumes:
+      - staticfiles:/var/www/8feet/staticfiles
+      - applogs:/var/log/8feet
+    command: celery -A eightfeet worker -l info
 
   # PostgreSQL 17.9
   db:

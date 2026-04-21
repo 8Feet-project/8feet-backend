@@ -333,6 +333,21 @@ CHANNEL_LAYERS = {
 }
 
 # ============================================================
+# Celery
+# ============================================================
+CELERY_BROKER_URL = _env('CELERY_BROKER_URL', _YAML_CONFIG.get('CeleryBrokerUrl', REDIS_LOCATION))
+CELERY_RESULT_BACKEND = _env('CELERY_RESULT_BACKEND', _YAML_CONFIG.get('CeleryResultBackend', REDIS_LOCATION))
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = _to_int(
+    _env('CELERY_TASK_TIME_LIMIT', _YAML_CONFIG.get('CeleryTaskTimeLimit', 600)),
+    600,
+)
+
+# ============================================================
 # Minio 对象存储
 # ============================================================
 S3_SECRET_ID = _env('S3_SECRET_ID', _YAML_CONFIG.get('S3SecretId', ''))

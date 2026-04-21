@@ -24,4 +24,7 @@ dependencies = [
     "channels",
     "channels-redis",
     "daphne",
+    "celery[redis]",
+    "python-docx",
+    "reportlab",
 ]
