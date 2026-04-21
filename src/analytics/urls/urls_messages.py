@@ -2,7 +2,6 @@
 站内消息相关路由 (挂载于 /api/v1/messages/)
 """
 from django.urls import path
-from django.http import JsonResponse
 
 from analytics.api.messages_api import (
     message_list, mark_read, mark_all_read

@@ -9,16 +9,22 @@ from django.core.mail import send_mail
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.http import JsonResponse
 from django.urls import path
 
 from llm_manager.models.llm_config import LLMConfig
 from shared.permissions import setup_groups
+from shared.utils import (
+    ErrorCode,
+    failed_api_response,
+    response_wrapper,
+    success_api_response,
+)
 from users.models.user_profile import UserProfile, ROLE_SUPER_ADMIN
 
 
 def _json_error(message: str, status: int = 400):
-    return JsonResponse({"message": message}, status=status)
+    error_code = ErrorCode.SERVICE_UNAVAILABLE if status == 503 else ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR
+    return failed_api_response(error_code, message)
 
 
 def _build_init_response(super_admin_profile, message: str = "", **extra_fields):
@@ -30,7 +36,7 @@ def _build_init_response(super_admin_profile, message: str = "", **extra_fields)
     if message:
         payload["message"] = message
     payload.update(extra_fields)
-    return JsonResponse(payload)
+    return success_api_response(payload)
 
 
 def _load_request_data(request):
@@ -57,6 +63,7 @@ def _build_super_admin_username(base_email: str) -> str:
         index += 1
 
 
+@response_wrapper
 def init_status(request):
     """获取平台初始化状态"""
     User = get_user_model()
@@ -66,12 +73,13 @@ def init_status(request):
     # 检查是否存在超级管理员
     has_super_admin = UserProfile.objects.filter(role=ROLE_SUPER_ADMIN).exists()
     
-    return JsonResponse({
+    return success_api_response({
         "initialized": has_any_user,
         "has_super_admin": has_super_admin
     })
 
 
+@response_wrapper
 def initialize(request):
     """引导初始化过程
     使用管理员邮箱创建或提升超级管理员账户。

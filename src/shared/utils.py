@@ -25,6 +25,7 @@ class ErrorCode(Enum):
     REFUSE_ACCESS = 403
     ITEM_NOT_FOUND = 404
     INTERNAL_SERVER_ERROR = 500
+    SERVICE_UNAVAILABLE = 503
 
 
 # ============================================================
@@ -39,12 +40,12 @@ def success_api_response(data=None):
     }
 
 
-def failed_api_response(code: ErrorCode, message: str):
+def failed_api_response(code: ErrorCode, message: str, data=None):
     """构造失败响应"""
     return {
         "code": code.value,
         "message": message,
-        "data": None
+        "data": data
     }
 
 
