@@ -17,7 +17,8 @@ from shared.utils import (
 from users.interface.auth_interface import (
     authenticate_by_username, authenticate_by_email, refresh_access_token, register_user,
     send_verification_email, verify_email_code, verify_email_code_for_scene, request_password_reset,
-    confirm_password_reset, update_user_profile, change_user_password, blacklist_token
+    confirm_password_reset, update_user_profile, change_user_password, blacklist_token,
+    revoke_refresh_token,
 )
 
 
@@ -126,8 +127,21 @@ def logout(request: HttpRequest):
     """用户退出登录
     [route]: POST /api/v1/auth/logout
     """
+    import json
+    try:
+        data = json.loads(request.body)
+    except:
+        data = request.POST
+
     header = request.META.get("HTTP_AUTHORIZATION")
     blacklist_token(header)
+
+    refresh_token_str = data.get('refresh_token')
+    if refresh_token_str:
+        success, message = revoke_refresh_token(refresh_token_str, request.user.id)
+        if not success:
+            return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
+
     return success_api_response({"result": "success"})
 
 

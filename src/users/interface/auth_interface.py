@@ -187,6 +187,38 @@ def refresh_access_token(refresh_token_str: str) -> Tuple[bool, Optional[str], O
         return False, f"刷新失败: {str(e)}", None
 
 
+def revoke_refresh_token(refresh_token_str: str, user_id: int = None) -> Tuple[bool, str]:
+    """废弃 refresh_token 对应的会话记录。"""
+    try:
+        token = jwt.decode(
+            refresh_token_str, settings.SECRET_KEY, algorithms="HS256")
+        if token.get("type") != "refresh_token":
+            raise jwt.InvalidTokenError
+
+        record_pk = token.get("record_pk")
+        token_user_id = token.get("user_id")
+        if not record_pk or not token_user_id:
+            raise jwt.InvalidTokenError
+
+        if user_id is not None and int(token_user_id) != int(user_id):
+            return False, "refresh_token 不属于当前用户"
+
+        auth_record = AuthRecord.objects.filter(
+            pk=record_pk,
+            user_id=token_user_id,
+        ).first()
+        if auth_record is None:
+            raise jwt.InvalidTokenError
+
+        auth_record.delete()
+        return True, "refresh_token 已失效"
+
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return False, "无效或已过期的刷新令牌"
+    except Exception as e:
+        return False, f"注销失败: {str(e)}"
+
+
 def send_verification_email(email: str, scene: str) -> Tuple[bool, int]:
     """发送邮箱验证码"""
     code = ''.join(random.choices(string.digits, k=6))
