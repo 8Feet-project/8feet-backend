@@ -1,10 +1,60 @@
 """
 平台初始化路由 (挂载于 /api/v1/platform/)
 """
-from django.urls import path
-from django.http import JsonResponse
+import json
+import secrets
+
 from django.contrib.auth import get_user_model
+from django.core.mail import send_mail
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.http import JsonResponse
+from django.urls import path
+
+from llm_manager.models.llm_config import LLMConfig
+from shared.permissions import setup_groups
 from users.models.user_profile import UserProfile, ROLE_SUPER_ADMIN
+
+
+def _json_error(message: str, status: int = 400):
+    return JsonResponse({"message": message}, status=status)
+
+
+def _build_init_response(super_admin_profile, message: str = "", **extra_fields):
+    User = get_user_model()
+    payload = {
+        "initialized": User.objects.exists(),
+        "super_admin_user_id": super_admin_profile.user_id if super_admin_profile else None,
+    }
+    if message:
+        payload["message"] = message
+    payload.update(extra_fields)
+    return JsonResponse(payload)
+
+
+def _load_request_data(request):
+    try:
+        return json.loads(request.body or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _build_super_admin_username(base_email: str) -> str:
+    User = get_user_model()
+    local_part = base_email.split("@", 1)[0].strip().lower().replace(" ", "_")
+    seed = "".join(ch for ch in local_part if ch.isalnum() or ch in {"_", ".", "-"})
+    candidate = seed or "super_admin"
+
+    if not User.objects.filter(username=candidate).exists():
+        return candidate
+
+    index = 1
+    while True:
+        candidate_with_suffix = f"{candidate}_{index}"
+        if not User.objects.filter(username=candidate_with_suffix).exists():
+            return candidate_with_suffix
+        index += 1
 
 
 def init_status(request):
@@ -24,34 +74,108 @@ def init_status(request):
 
 def initialize(request):
     """引导初始化过程
-    如果不存在超级管理员，则使用默认凭据一键创建
+    使用管理员邮箱创建或提升超级管理员账户。
     """
-    User = get_user_model()
     super_admin_profile = UserProfile.objects.filter(role=ROLE_SUPER_ADMIN).first()
-    
-    if request.method == 'POST' and not super_admin_profile:
-        # 直接配置参数
-        username = "super_admin"
-        password = "super_admin_password"
-        email = "23373052@buaa.edu.cn"
-        nickname = "SUPERADMIN"
-        
-        from users.interface.auth_interface import register_user
-        success, message, result = register_user(
-            username, nickname, password, email, email_verified=True
-        )
-        
-        
-        if not success:
-            return JsonResponse({
-                "initialized": False,
-                "super_admin_user_id": -404
-            })
 
-    return JsonResponse({
-        "initialized": User.objects.exists(),
-        "super_admin_user_id": super_admin_profile.user_id if super_admin_profile else None
-    })
+    if request.method != 'POST':
+        return _json_error("请使用 POST 方法", status=405)
+
+    payload = _load_request_data(request)
+    if payload is None:
+        return _json_error("请求体不是合法 JSON")
+
+    site_name = (payload.get('site_name') or '').strip()
+    admin_email = (payload.get('admin_email') or '').strip()
+    default_model_id = (payload.get('default_model_id') or '').strip()
+
+    if not site_name:
+        return _json_error("site_name 不能为空")
+    if not admin_email:
+        return _json_error("admin_email 不能为空")
+    try:
+        validate_email(admin_email)
+    except ValidationError:
+        return _json_error("admin_email 格式不合法")
+
+    selected_model = None
+    if default_model_id:
+        selected_model = LLMConfig.objects.filter(model_id=default_model_id).first()
+        if selected_model is None:
+            return _json_error("default_model_id 不存在")
+
+    # 确保角色组存在，后续 Profile 保存时才能正确继承权限。
+    setup_groups()
+
+    if super_admin_profile:
+        return _build_init_response(
+            super_admin_profile,
+            message="平台已初始化，已存在超级管理员",
+            site_name=site_name,
+            default_model_id=selected_model.model_id if selected_model else default_model_id or None,
+            admin_email=super_admin_profile.user.email,
+        )
+
+    User = get_user_model()
+    temp_password = secrets.token_urlsafe(12)
+
+    with transaction.atomic():
+        existing_user = User.objects.filter(email=admin_email).select_related('profile').first()
+
+        if existing_user:
+            profile, _ = UserProfile.objects.get_or_create(user=existing_user)
+            if not profile.nickname:
+                profile.nickname = site_name
+            profile.role = ROLE_SUPER_ADMIN
+            profile.email_verified = True
+            profile.save()
+            super_admin_profile = profile
+            created = False
+            username = existing_user.username
+        else:
+            username = _build_super_admin_username(admin_email)
+            user = User.objects.create_user(
+                username=username,
+                email=admin_email,
+                password=temp_password,
+                first_name=site_name,
+            )
+            super_admin_profile = UserProfile.objects.create(
+                user=user,
+                nickname=site_name,
+                role=ROLE_SUPER_ADMIN,
+                email_verified=True,
+            )
+            created = True
+
+    try:
+        send_mail(
+            subject=f"【{site_name}】平台初始化完成",
+            message=(
+                f"平台已初始化。\n"
+                f"管理员用户名：{username}\n"
+                f"临时密码：{temp_password}\n"
+                f"请登录后尽快修改密码。"
+            ),
+            from_email=None,
+            recipient_list=[admin_email],
+            fail_silently=False,
+        )
+        mail_sent = True
+    except Exception:
+        mail_sent = False
+
+    return _build_init_response(
+        super_admin_profile,
+        message="平台初始化完成" if created else "已将现有账户提升为超级管理员",
+        site_name=site_name,
+        default_model_id=selected_model.model_id if selected_model else default_model_id or None,
+        admin_email=admin_email,
+        admin_username=username,
+        temp_password=temp_password if created else None,
+        reused_existing_user=not created,
+        email_sent=mail_sent,
+    )
 
 urlpatterns = [
     path('init-status', init_status, name='platform-init-status'),
