@@ -168,13 +168,6 @@ def initialize(request):
     return _build_init_response(
         super_admin_profile,
         message="平台初始化完成" if created else "已将现有账户提升为超级管理员",
-        site_name=site_name,
-        default_model_id=selected_model.model_id if selected_model else default_model_id or None,
-        admin_email=admin_email,
-        admin_username=username,
-        temp_password=temp_password if created else None,
-        reused_existing_user=not created,
-        email_sent=mail_sent,
     )
 
 urlpatterns = [

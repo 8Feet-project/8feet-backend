@@ -44,8 +44,7 @@ def _serialize_user(user) -> Dict:
         "role": profile.role if profile else ROLE_USER,
         "is_active": user.is_active,
         "is_staff": user.is_staff,
-        "permissions": sorted(user.get_all_permissions()),
-        "extra_permissions": extra_permissions,
+        "permissions": sorted(user.get_all_permissions())+extra_permissions,
         "created_at": user.date_joined.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
