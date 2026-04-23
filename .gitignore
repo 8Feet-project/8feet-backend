@@ -36,14 +36,16 @@ Thumbs.db
 # Config (keep example.yaml)
 config.yaml
 .env
+/.env
+/.env.local
+!.env.example
 logs/
 backup/
 docs/
 .codex
-config.yaml
 deploy.sh
 
-#docs
+# Docs
 *.md
 *.doc
 *.docx

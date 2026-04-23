@@ -1,0 +1,3 @@
+[submodule "efeet"]
+	path = efeet
+	url = https://github.com/8Feet-project/efeet.git

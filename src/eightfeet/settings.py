@@ -6,6 +6,7 @@ import os
 from urllib.parse import quote_plus
 
 import yaml
+from dotenv import load_dotenv
 
 
 def _to_bool(value, default=False):
@@ -61,6 +62,7 @@ def _is_placeholder_secret(value):
 # 配置文件加载
 # ============================================================
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+load_dotenv(os.path.join(_PROJECT_ROOT, '.env'))
 _CONFIG_PATH = os.path.join(_PROJECT_ROOT, 'config.yaml')
 
 if not os.path.exists(_CONFIG_PATH):
