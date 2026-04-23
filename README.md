@@ -12,10 +12,18 @@
 
 ### 2. 安装依赖
 ```bash
-uv sync
+uv sync --python 3.12
 ```
 
-### 3. 一键初始化
+### 3. 配置模型环境变量
+后端支持从项目根目录 `.env` 加载 AI 模型配置，可参考 `.env.example`：
+```env
+MODEL_NAME=glm-5.1
+MODEL_API_KEY=your-api-key
+MODEL_BASE_URL=https://api.modelarts-maas.com/v2
+```
+
+### 4. 一键初始化
 Windows:
 ```powershell
 .\scripts\init_db.ps1 # win未验证
@@ -30,7 +38,7 @@ Linux:
 - 启动 Minio (端口 9000/9001)
 - 执行 Django 数据库迁移
 
-### 4. 运行开发服务器
+### 5. 运行开发服务器
 ```bash
 uv run python src/manage.py runserver
 ```

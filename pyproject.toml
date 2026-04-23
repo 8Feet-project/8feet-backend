@@ -24,4 +24,8 @@ dependencies = [
     "channels",
     "channels-redis",
     "daphne",
+    "efeet",
 ]
+
+[tool.uv.sources]
+efeet = { path = "./efeet", editable = true }

@@ -11,7 +11,8 @@ from shared.utils import (
 )
 from research.interface.research_interface import (
     create_research_task, get_task_detail,
-    list_user_tasks, cancel_task, get_task_step_logs
+    list_user_tasks, cancel_task, get_task_step_logs,
+    get_task_conversation_history, continue_task_conversation,
 )
 
 
@@ -62,7 +63,7 @@ def task_detail(request: HttpRequest):
         return failed_api_response(
             ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "task_id 不能为空")
 
-    data = get_task_detail(int(task_id))
+    data = get_task_detail(int(task_id), request.user.id)
     if not data:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
 
@@ -114,5 +115,52 @@ def task_steps(request: HttpRequest):
         return failed_api_response(
             ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "task_id 不能为空")
 
-    logs = get_task_step_logs(int(task_id))
+    logs = get_task_step_logs(int(task_id), request.user.id)
     return success_api_response(logs)
+
+
+@response_wrapper
+@require_GET
+@jwt_auth(perms=['research.view_research'])
+def task_history(request: HttpRequest):
+    """获取任务会话历史
+
+    [route]: GET /api/research/task/history?task_id=1
+    """
+    task_id = request.GET.get('task_id')
+    if not task_id:
+        return failed_api_response(
+            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "task_id 不能为空")
+
+    history = get_task_conversation_history(int(task_id), request.user.id)
+    if not history:
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务或会话不存在")
+    return success_api_response(history)
+
+
+@response_wrapper
+@require_POST
+@jwt_auth(perms=['research.view_research'])
+def task_followup(request: HttpRequest):
+    """基于已保存会话继续追问
+
+    [route]: POST /api/research/task/followup
+    """
+    task_id = request.POST.get('task_id')
+    message = request.POST.get('message')
+    if not task_id or not message:
+        return failed_api_response(
+            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR,
+            "task_id 和 message 不能为空"
+        )
+
+    success, error_message = continue_task_conversation(
+        int(task_id), request.user.id, message
+    )
+    if not success:
+        return failed_api_response(
+            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR,
+            error_message or "继续追问失败"
+        )
+
+    return success_api_response({"task_id": int(task_id)})

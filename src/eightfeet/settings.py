@@ -4,12 +4,14 @@
 """
 import os
 import yaml
+from dotenv import load_dotenv
 
 # ============================================================
 # 配置文件加载
 # ============================================================
 # 项目根目录（src/ 的父目录，即项目根）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+load_dotenv(os.path.join(_PROJECT_ROOT, '.env'))
 
 _CONFIG_PATH = os.path.join(_PROJECT_ROOT, 'config.yaml')
 
