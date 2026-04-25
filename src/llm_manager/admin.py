@@ -13,9 +13,9 @@ class LLMConfigAdmin(admin.ModelAdmin):
 
 @admin.register(ModelPermission)
 class ModelPermissionAdmin(admin.ModelAdmin):
-    list_display = ['llm_config', 'user', 'is_active', 'daily_quota', 'priority_weight']
-    list_filter = ['is_active', 'llm_config']
-    search_fields = ['user__username', 'llm_config__name']
+    list_display = ['llm_config', 'user', 'role', 'is_active', 'daily_quota', 'priority_weight']
+    list_filter = ['is_active', 'role', 'llm_config']
+    search_fields = ['user__username', 'role', 'llm_config__name']
 
 
 @admin.register(ModelObjectMapping)

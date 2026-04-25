@@ -7,6 +7,7 @@
 from django.contrib import admin
 from django.urls import path, include
 from eightfeet.health import healthz, readyz
+from llm_manager.api.llm_api import available_models
 
 urlpatterns = [
     path('healthz', healthz),
@@ -23,6 +24,7 @@ urlpatterns = [
         path('platform/', include('eightfeet.urls_platform')),
         # 大模型管理 (管理端)
         path('admin/models/', include('llm_manager.urls.urls_admin')),
+        path('models/available', available_models, name='models-available'),
         path('model-routing/', include('llm_manager.urls.urls_routing')),
         # 调研任务
         path('research/', include('research.urls')),

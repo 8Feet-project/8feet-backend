@@ -21,7 +21,12 @@ class ModelPermission(models.Model):
     user = models.ForeignKey(
         get_user_model(), on_delete=models.CASCADE,
         related_name='llm_permissions',
+        null=True, blank=True,
         help_text="关联特定用户"
+    )
+    role = models.CharField(
+        max_length=16, null=True, blank=True,
+        help_text="关联用户角色，为空则只匹配指定用户"
     )
     is_active = models.BooleanField(
         default=True, help_text="该用户是否可使用此模型"
@@ -41,7 +46,10 @@ class ModelPermission(models.Model):
         db_table = 'model_permission'
         verbose_name = '模型用户权限'
         verbose_name_plural = verbose_name
-        unique_together = ('llm_config', 'user')
+        unique_together = (
+            ('llm_config', 'user'),
+            ('llm_config', 'role'),
+        )
 
 
 # 调研用途分类

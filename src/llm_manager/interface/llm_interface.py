@@ -1,109 +1,375 @@
-from typing import Tuple, Optional, List
+from __future__ import annotations
+
+import os
 from decimal import Decimal
+from typing import Any, Optional
+from uuid import uuid4
+
+from django.db.models import Q
+
 from llm_manager.models.llm_config import LLMConfig
-from llm_manager.models.model_permission import ModelObjectMapping, ModelPermission
+from llm_manager.models.model_permission import (
+    ModelObjectMapping,
+    ModelPermission,
+    OBJECT_TYPE_COMPANY,
+    OBJECT_TYPE_PRODUCT,
+    OBJECT_TYPE_STOCK,
+    USAGE_TYPE_GENERAL,
+)
 from llm_manager.models.model_usage import ModelUsage
 
 
+OBJECT_TYPE_ALIASES = {
+    "company": OBJECT_TYPE_COMPANY,
+    "stock": OBJECT_TYPE_STOCK,
+    "commodity": OBJECT_TYPE_PRODUCT,
+    "product": OBJECT_TYPE_PRODUCT,
+    OBJECT_TYPE_COMPANY.lower(): OBJECT_TYPE_COMPANY,
+    OBJECT_TYPE_STOCK.lower(): OBJECT_TYPE_STOCK,
+    OBJECT_TYPE_PRODUCT.lower(): OBJECT_TYPE_PRODUCT,
+}
+
+
+def normalize_object_type(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return OBJECT_TYPE_ALIASES.get(text.lower(), text.upper())
+
+
+def normalize_usage_type(value: str | None) -> str:
+    return str(value or USAGE_TYPE_GENERAL).strip().upper() or USAGE_TYPE_GENERAL
+
+
 def create_or_update_llm_config(
-    name: str, provider: str, model_id: str,
-    api_endpoint: str = None, api_key: str = None,
-    context_window: int = 4096, max_output_tokens: int = 2048,
-    input_price_1m: float = 0.0, output_price_1m: float = 0.0,
-    params: dict = None, description: str = None
-) -> Tuple[bool, Optional[str], Optional[int]]:
-    """创建或更新大模型配置"""
+    name: str,
+    provider: str,
+    model_id: str,
+    api_endpoint: str = None,
+    api_key: str = None,
+    context_window: int = 4096,
+    max_output_tokens: int = 2048,
+    input_price_1m: float = 0.0,
+    output_price_1m: float = 0.0,
+    params: dict = None,
+    description: str = None,
+    is_enabled: bool = True,
+    is_online: bool = True,
+) -> tuple[bool, Optional[str], Optional[int]]:
+    """创建或更新大模型配置。model_id 是供应商模型名，API 对外 ID 使用主键。"""
     if not name or not provider or not model_id:
         return (False, "name, provider, model_id 均为必填项", None)
 
-    config, created = LLMConfig.objects.update_or_create(
-        provider=provider, model_id=model_id,
+    config, _ = LLMConfig.objects.update_or_create(
+        provider=provider,
+        model_id=model_id,
         defaults={
             'name': name,
             'api_endpoint': api_endpoint,
             'api_key_encrypted': api_key,
-            'context_window': context_window,
-            'max_output_tokens': max_output_tokens,
-            'input_price_1m': Decimal(str(input_price_1m)),
-            'output_price_1m': Decimal(str(output_price_1m)),
+            'context_window': int(context_window or 4096),
+            'max_output_tokens': int(max_output_tokens or 2048),
+            'input_price_1m': Decimal(str(input_price_1m or 0)),
+            'output_price_1m': Decimal(str(output_price_1m or 0)),
             'params': params or {},
             'description': description,
-        }
+            'is_enabled': bool(is_enabled),
+            'is_online': bool(is_online),
+        },
     )
     return (True, None, config.id)
 
 
+def toggle_llm_config(config_id: int, is_enabled: bool) -> tuple[bool, str | None]:
+    config = LLMConfig.objects.filter(pk=config_id).first()
+    if not config:
+        return (False, "模型不存在")
+    config.is_enabled = bool(is_enabled)
+    config.save(update_fields=['is_enabled', 'updated_at'])
+    return (True, None)
+
+
+def user_role(user) -> str:
+    try:
+        profile = getattr(user, "profile", None)
+    except Exception:
+        profile = None
+    return str(getattr(profile, "role", "") or "").strip()
+
+
+def is_super_admin(user) -> bool:
+    return bool(
+        getattr(user, "is_superuser", False)
+        or user_role(user) == "super_admin"
+    )
+
+
 def get_user_model_permission(user, config_id: int) -> Optional[dict]:
-    """获取用户对特定模型的权限集合 (包含参数覆盖)"""
-    perm = ModelPermission.objects.filter(user=user, llm_config_id=config_id, is_active=True).first()
+    """获取用户对特定模型的权限。默认禁止，super_admin 默认允许。"""
+    if is_super_admin(user):
+        return {
+            'daily_quota': None,
+            'priority_weight': 100,
+            'params_override': {},
+        }
+
+    role = user_role(user)
+    query = Q(user=user)
+    if role:
+        role_aliases = {role, role.upper()}
+        if role == "user":
+            role_aliases.add("NORMAL")
+        if role == "admin":
+            role_aliases.add("ADMIN")
+        query |= Q(role__in=role_aliases)
+
+    perm = (
+        ModelPermission.objects
+        .filter(query, llm_config_id=config_id, is_active=True)
+        .order_by('-priority_weight')
+        .first()
+    )
     if not perm:
         return None
-    
+
     return {
         'daily_quota': perm.daily_quota,
         'priority_weight': perm.priority_weight,
-        'params_override': perm.custom_params_override
+        'params_override': perm.custom_params_override or {},
     }
+
+
+def user_can_use_model(user, config: LLMConfig) -> bool:
+    return bool(
+        config
+        and config.is_enabled
+        and config.is_online
+        and get_user_model_permission(user, config.id) is not None
+    )
+
+
+def serialize_model_available(config: LLMConfig) -> dict:
+    return {
+        "model_id": str(config.id),
+        "model_name": config.name,
+        "provider": config.provider,
+    }
+
+
+def serialize_model_detail(config: LLMConfig) -> dict:
+    return {
+        "id": config.id,
+        "model_id": str(config.id),
+        "provider_model_id": config.model_id,
+        "name": config.name,
+        "model_name": config.name,
+        "provider": config.provider,
+        "api_endpoint": config.api_endpoint,
+        "context_window": config.context_window,
+        "max_output_tokens": config.max_output_tokens,
+        "pricing": {
+            "input": float(config.input_price_1m),
+            "output": float(config.output_price_1m),
+        },
+        "params": config.params or {},
+        "is_enabled": config.is_enabled,
+        "is_online": config.is_online,
+        "description": config.description,
+        "created_at": config.created_at.isoformat() if config.created_at else None,
+        "updated_at": config.updated_at.isoformat() if config.updated_at else None,
+    }
+
+
+def list_llm_configs(is_enabled: bool = None) -> list[dict]:
+    """获取大模型配置列表，管理端使用。"""
+    query = LLMConfig.objects.all().order_by('id')
+    if is_enabled is not None:
+        query = query.filter(is_enabled=is_enabled)
+    return [serialize_model_detail(config) for config in query]
+
+
+def list_available_models(
+    user,
+    object_type: str | None = None,
+    usage_type: str = USAGE_TYPE_GENERAL,
+) -> list[LLMConfig]:
+    """列出当前用户可使用模型；传 object_type 时优先按场景映射排序。"""
+    object_type = normalize_object_type(object_type)
+    usage_type = normalize_usage_type(usage_type)
+    configs = list(
+        LLMConfig.objects
+        .filter(is_enabled=True, is_online=True)
+        .order_by('id')
+    )
+    configs = [config for config in configs if user_can_use_model(user, config)]
+    if not object_type:
+        return configs
+
+    mappings = list(
+        ModelObjectMapping.objects
+        .filter(
+            object_type=object_type,
+            usage_type=usage_type,
+            llm_config_id__in=[config.id for config in configs],
+        )
+        .select_related('llm_config')
+        .order_by('-priority', '-is_default', 'llm_config_id')
+    )
+    mapped_ids = [mapping.llm_config_id for mapping in mappings]
+    by_id = {config.id: config for config in configs}
+    ordered = [by_id[config_id] for config_id in mapped_ids if config_id in by_id]
+    ordered.extend(config for config in configs if config.id not in mapped_ids)
+    return ordered
+
+
+def get_recommended_config(
+    user,
+    object_type: str,
+    usage_type: str = USAGE_TYPE_GENERAL,
+) -> LLMConfig | None:
+    candidates = list_available_models(user, object_type, usage_type)
+    return candidates[0] if candidates else None
+
+
+def get_recommended_model(
+    user,
+    object_type: str,
+    usage_type: str = USAGE_TYPE_GENERAL,
+) -> Optional[dict]:
+    config = get_recommended_config(user, object_type, usage_type)
+    return serialize_model_available(config) if config else None
+
+
+def build_routing_recommendation(
+    user,
+    object_type: str | None,
+    usage_type: str = USAGE_TYPE_GENERAL,
+) -> dict:
+    configs = list_available_models(user, object_type, usage_type)
+    recommended = configs[0] if configs else None
+    normalized_object_type = normalize_object_type(object_type)
+    return {
+        "recommended_model_id": str(recommended.id) if recommended else None,
+        "candidate_models": [serialize_model_available(config) for config in configs],
+        "reason": (
+            f"根据对象类型 {normalized_object_type or 'GENERAL'}、用途 "
+            f"{normalize_usage_type(usage_type)} 与当前用户授权推荐。"
+            if recommended else "当前用户没有可用模型，请联系管理员分配权限。"
+        ),
+    }
+
+
+def resolve_user_model_config(
+    user,
+    model_id: str | int | None = None,
+    object_type: str | None = None,
+    usage_type: str = USAGE_TYPE_GENERAL,
+) -> tuple[bool, str | None, LLMConfig | None, dict]:
+    """解析前端 model_id 或按场景推荐模型，并合并用户参数覆盖。"""
+    config = None
+    if model_id not in (None, ""):
+        try:
+            config = LLMConfig.objects.filter(pk=int(model_id)).first()
+        except (TypeError, ValueError):
+            return (False, "model_id 必须是平台模型配置 ID", None, {})
+        if not config:
+            return (False, "模型不存在", None, {})
+    else:
+        config = get_recommended_config(user, object_type, usage_type)
+        if not config:
+            return (False, "未找到当前用户可用模型", None, {})
+
+    if not config.is_enabled or not config.is_online:
+        return (False, "模型未启用或当前离线", None, {})
+
+    permission = get_user_model_permission(user, config.id)
+    if permission is None:
+        return (False, "当前用户无权使用该模型", None, {})
+
+    params = dict(config.params or {})
+    params.update(permission.get("params_override") or {})
+    return (True, None, config, params)
+
+
+def resolve_secret(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("${") and text.endswith("}"):
+        return os.getenv(text[2:-1].strip(), "").strip()
+    if text.lower().startswith("env:"):
+        return os.getenv(text[4:].strip(), "").strip()
+    return text
+
+
+def resolve_env_name(value: Any) -> str:
+    name = str(value or "").strip()
+    if not name:
+        return ""
+    return os.getenv(name, "").strip()
+
+
+def get_provider_runtime_config(
+    config: LLMConfig,
+    params: dict | None = None,
+) -> tuple[bool, str | None, dict]:
+    params = dict(params or config.params or {})
+    api_key = (
+        resolve_secret(config.api_key_encrypted)
+        or resolve_secret(params.get("api_key"))
+        or resolve_env_name(params.get("api_key_env"))
+    )
+    base_url = (
+        resolve_secret(config.api_endpoint)
+        or resolve_secret(params.get("base_url"))
+        or resolve_secret(params.get("api_base"))
+        or resolve_env_name(params.get("api_endpoint_env"))
+        or resolve_env_name(params.get("base_url_env"))
+    )
+    if not config.model_id or not api_key or not base_url:
+        return (False, "选定模型缺少 model_id / api_key / api_endpoint 配置", {})
+    return (
+        True,
+        None,
+        {
+            "model": config.model_id,
+            "api_key": api_key,
+            "base_url": base_url,
+            "debug_provider_http": bool(params.get("debug_provider_http", False)),
+        },
+    )
 
 
 def log_model_usage(
-    user, config_id: int, request_id: str, 
-    prompt_tokens: int, completion_tokens: int,
-    latency_ms: int = 0, usage_type: str = 'GENERAL',
-    status_code: int = 200
-) -> ModelUsage:
-    """记录模型调用流水并自动计算成本"""
-    config = LLMConfig.objects.get(pk=config_id)
-    total_tokens = prompt_tokens + completion_tokens
-    
-    # 计算成本 (按百万 Token 单价)
-    cost = (Decimal(prompt_tokens) * config.input_price_1m / Decimal(1000000)) + \
-           (Decimal(completion_tokens) * config.output_price_1m / Decimal(1000000))
-    
-    usage = ModelUsage.objects.create(
+    user,
+    config_id: int | None,
+    request_id: str | None,
+    prompt_tokens: int,
+    completion_tokens: int,
+    latency_ms: int = 0,
+    usage_type: str = USAGE_TYPE_GENERAL,
+    status_code: int = 200,
+) -> ModelUsage | None:
+    """记录模型调用流水并自动计算成本。config_id 为空时跳过。"""
+    if not config_id:
+        return None
+    config = LLMConfig.objects.filter(pk=config_id).first()
+    if not config:
+        return None
+    total_tokens = int(prompt_tokens or 0) + int(completion_tokens or 0)
+    cost = (
+        Decimal(int(prompt_tokens or 0)) * config.input_price_1m / Decimal(1000000)
+        + Decimal(int(completion_tokens or 0)) * config.output_price_1m / Decimal(1000000)
+    )
+    return ModelUsage.objects.create(
         user=user,
         llm_config=config,
-        request_id=request_id,
-        usage_type=usage_type,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
+        request_id=request_id or str(uuid4()),
+        usage_type=normalize_usage_type(usage_type),
+        prompt_tokens=int(prompt_tokens or 0),
+        completion_tokens=int(completion_tokens or 0),
         total_tokens=total_tokens,
         cost=cost,
-        latency_ms=latency_ms,
-        status_code=status_code
+        latency_ms=int(latency_ms or 0),
+        status_code=int(status_code or 200),
     )
-    return usage
-
-
-def list_llm_configs(is_enabled: bool = None) -> List[dict]:
-    """获取大模型配置列表 (管理员视角)"""
-    query = LLMConfig.objects.all()
-    if is_enabled is not None:
-        query = query.filter(is_enabled=is_enabled)
-    return list(query.values(
-        'id', 'name', 'provider', 'model_id',
-        'is_enabled', 'is_online', 'description', 
-        'input_price_1m', 'output_price_1m', 'created_at'
-    ))
-
-
-def get_recommended_model(object_type: str, usage_type: str = 'GENERAL') -> Optional[dict]:
-    """获取某调研对象类型在特定用途下的最优推荐模型"""
-    mapping = ModelObjectMapping.objects.filter(
-        object_type=object_type, 
-        usage_type=usage_type,
-        llm_config__is_enabled=True,
-        llm_config__is_online=True
-    ).select_related('llm_config').order_by('-priority', '-is_default').first()
-
-    if not mapping:
-        return None
-
-    config = mapping.llm_config
-    return {
-        'id': config.id,
-        'name': config.name,
-        'provider': config.provider,
-        'model_id': config.model_id,
-        'context_window': config.context_window
-    }

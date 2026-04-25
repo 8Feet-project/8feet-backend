@@ -19,6 +19,7 @@ ROLE_PERMISSIONS = {
         # 平台初始化与模型管理
         'llm_manager.change_llmconfig',
         'llm_manager.view_llmconfig',
+        'llm_manager.view_modelusage',
         # 统计与日志
         'analytics.view_dashboard',
         'analytics.view_audit_log',
@@ -45,6 +46,7 @@ ROLE_PERMISSIONS = {
         'research.create_research',
         'research.view_research',
         'reports.view_report',
+        'reports.followup_report',
         'analytics.add_favorite',
         'analytics.view_favorite',
     ],
@@ -53,6 +55,7 @@ ROLE_PERMISSIONS = {
         'research.create_research',
         'research.view_research',
         'reports.view_report',
+        'reports.followup_report',
         'analytics.add_favorite',
         'analytics.view_favorite',
         'analytics.create_alert',
