@@ -2,6 +2,8 @@
 调研任务 API — 任务发起/查询/取消/步骤日志
 映射需求: FR-JSDY-0001 ~ FR-JSDY-0006
 """
+import json
+
 from django.http import HttpRequest
 from django.views.decorators.http import require_GET, require_POST
 
@@ -21,6 +23,15 @@ from research.interface.research_interface import (
 )
 
 
+def _request_data(request: HttpRequest) -> dict:
+    if request.content_type and "application/json" in request.content_type:
+        try:
+            return json.loads(request.body or b"{}")
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return request.POST
+
+
 @response_wrapper
 @require_POST
 @jwt_auth(perms=['research.create_research'])
@@ -29,24 +40,40 @@ def create_task(request: HttpRequest):
 
     [route]: POST /api/v1/research/task
     """
-    title = request.POST.get('title')
-    object_name = request.POST.get('object_name')
-    object_type = request.POST.get('object_type')
-    llm_config_id = request.POST.get('llm_config_id')
+    data = _request_data(request)
+    object_name = data.get('object_name')
+    object_type = data.get('object_type')
+    title = data.get('title') or (f"{object_name} 深度调研" if object_name else None)
+    llm_config_id = data.get('llm_config_id')
+    model_id = data.get('model_id')
 
-    import json
-    params_str = request.POST.get('search_params', '{}')
-    try:
-        search_params = json.loads(params_str)
-    except (json.JSONDecodeError, TypeError):
+    search_params = data.get('search_params', {})
+    if isinstance(search_params, str):
+        try:
+            search_params = json.loads(search_params or "{}")
+        except (json.JSONDecodeError, TypeError):
+            search_params = {}
+    if not isinstance(search_params, dict):
         search_params = {}
+    for key in ('time_range', 'source_authority', 'source_types', 'multi_model_ids', 'enable_cross_validation'):
+        if key in data and data.get(key) is not None:
+            search_params[key] = data.get(key)
+
+    try:
+        parsed_llm_config_id = int(llm_config_id) if llm_config_id else None
+    except (TypeError, ValueError):
+        return failed_api_response(
+            ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR,
+            "llm_config_id 必须是数字",
+        )
 
     success, message, task_id = create_research_task(
         user_id=request.user.id,
         title=title,
         object_name=object_name,
         object_type=object_type,
-        llm_config_id=int(llm_config_id) if llm_config_id else None,
+        llm_config_id=parsed_llm_config_id,
+        model_id=model_id,
         search_params=search_params,
     )
     if not success:
@@ -55,7 +82,23 @@ def create_task(request: HttpRequest):
             message,
         )
 
-    return success_api_response({"task_id": task_id})
+    return success_api_response({
+        "task_id": str(task_id),
+        "detected_object_type": object_type,
+        "status": "pending",
+        "next_action": "poll_status",
+    })
+
+
+@response_wrapper
+@jwt_auth()
+def task_collection(request: HttpRequest):
+    """兼容 /research/tasks 的 GET 列表与 POST 创建。"""
+    if request.method == 'POST':
+        return create_task(request)
+    if request.method == 'GET':
+        return task_list(request)
+    return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "不支持的请求方法")
 
 
 @response_wrapper

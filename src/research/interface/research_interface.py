@@ -10,6 +10,10 @@ from uuid import uuid4
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
+from llm_manager.interface.llm_interface import (
+    normalize_object_type,
+    resolve_user_model_config,
+)
 from research.interface.research_runtime import (
     build_followup_prompt,
     build_initial_prompt,
@@ -35,6 +39,7 @@ def create_research_task(
     object_name: str,
     object_type: str,
     llm_config_id: int = None,
+    model_id: str = None,
     search_params: dict = None,
 ) -> Tuple[bool, Optional[str], Optional[int]]:
     """创建调研任务并异步触发 efeet 执行。"""
@@ -46,12 +51,25 @@ def create_research_task(
     if not title or not object_name or not object_type:
         return (False, "title/object_name/object_type 不能为空", None)
 
+    normalized_object_type = normalize_object_type(object_type)
+    if not normalized_object_type:
+        return (False, "object_type 无效", None)
+
+    selected_model_id = llm_config_id or model_id
+    ok, message, config, _ = resolve_user_model_config(
+        user,
+        model_id=selected_model_id,
+        object_type=normalized_object_type,
+    )
+    if not ok:
+        return (False, message, None)
+
     task = ResearchTask.objects.create(
         user=user,
         title=title,
         object_name=object_name,
-        object_type=object_type,
-        llm_config_id=llm_config_id,
+        object_type=normalized_object_type,
+        llm_config=config,
         search_params=search_params or {},
         status=STATUS_PENDING,
         progress={
@@ -355,6 +373,7 @@ def continue_task_conversation(
     task_id: int,
     user_id: int,
     message: str,
+    run_metadata: dict = None,
 ) -> Tuple[bool, Optional[str]]:
     """基于已保存会话继续追问。"""
     if not message or not message.strip():
@@ -378,6 +397,7 @@ def continue_task_conversation(
         prompt=build_followup_prompt(message),
         create_report=False,
         queued_step_name="开始处理追问",
+        run_metadata=run_metadata or {},
     )
     if not success:
         return (False, error_message)

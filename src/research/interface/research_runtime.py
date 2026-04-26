@@ -24,8 +24,12 @@ from efeet import (
     extract_presented_reports,
     resolve_effective_output,
 )
+from llm_manager.interface.llm_interface import (
+    get_provider_runtime_config,
+    log_model_usage,
+    resolve_user_model_config,
+)
 from llm_manager.models.llm_config import LLMConfig
-from llm_manager.models.model_permission import ModelObjectMapping
 from reports.models.citation import Citation
 from reports.models.report import Report
 from research.interface.thread_codec import (
@@ -122,6 +126,7 @@ def enqueue_task_run(
     prompt: str,
     create_report: bool,
     queued_step_name: str,
+    run_metadata: dict[str, Any] | None = None,
 ) -> tuple[bool, str | None]:
     """提交一个异步 research run。"""
     task = (
@@ -187,6 +192,7 @@ def enqueue_task_run(
             "message": prompt.strip(),
             "run_number": run_number,
             "create_report": create_report,
+            "run_metadata": run_metadata or {},
         },
     )
 
@@ -197,6 +203,7 @@ def enqueue_task_run(
             prompt,
             create_report,
             run_number,
+            run_metadata or {},
         )
     except Exception as exc:
         conversation.status = SESSION_STATUS_FAILED
@@ -226,6 +233,7 @@ def _run_task(
     prompt: str,
     create_report: bool,
     run_number: int,
+    run_metadata: dict[str, Any] | None = None,
 ) -> None:
     close_old_connections()
     started_at = perf_counter()
@@ -285,6 +293,7 @@ def _run_task(
             previous_report_row_count=previous_report_row_count,
             llm_config=effective_config,
             latency_ms=latency_ms,
+            run_metadata=run_metadata or {},
         )
     except TaskCancelledError as exc:
         _persist_cancelled(task, conversation, str(exc))
@@ -298,28 +307,18 @@ def _build_task_model(task: ResearchTask):
     """根据任务配置构建 efeet 模型。"""
     config = _resolve_task_llm_config(task)
     if config is not None:
-        params = config.params or {}
-        api_key = (
-            _resolve_secret(config.api_key_encrypted)
-            or _resolve_secret(params.get("api_key"))
-            or _resolve_env_name(params.get("api_key_env"))
+        ok, error_message, runtime_config = get_provider_runtime_config(
+            config,
+            getattr(task, "_llm_params", None),
         )
-        base_url = (
-            _resolve_secret(config.api_endpoint)
-            or _resolve_secret(params.get("base_url"))
-            or _resolve_secret(params.get("api_base"))
-            or _resolve_env_name(params.get("api_endpoint_env"))
-            or _resolve_env_name(params.get("base_url_env"))
-        )
-        if not config.model_id or not api_key or not base_url:
-            raise ValueError("选定模型缺少 model_id / api_key / api_endpoint 配置")
-        debug_provider_http = bool(params.get("debug_provider_http", False))
+        if not ok:
+            raise ValueError(error_message)
         return (
             create_chat_model(
-                model=config.model_id,
-                api_key=api_key,
-                base_url=base_url,
-                debug_provider_http=debug_provider_http,
+                model=runtime_config["model"],
+                api_key=runtime_config["api_key"],
+                base_url=runtime_config["base_url"],
+                debug_provider_http=runtime_config["debug_provider_http"],
             ),
             config,
         )
@@ -343,22 +342,16 @@ def _build_task_model(task: ResearchTask):
 
 
 def _resolve_task_llm_config(task: ResearchTask) -> LLMConfig | None:
-    if task.llm_config_id:
-        config = task.llm_config
-        if config and config.is_enabled:
-            return config
-
-    mapping = (
-        ModelObjectMapping.objects
-        .select_related('llm_config')
-        .filter(
-            object_type=task.object_type,
-            is_default=True,
-            llm_config__is_enabled=True,
-        )
-        .first()
+    model_id = str(task.llm_config_id) if task.llm_config_id else None
+    ok, message, config, params = resolve_user_model_config(
+        task.user,
+        model_id=model_id,
+        object_type=task.object_type,
     )
-    return mapping.llm_config if mapping else None
+    if not ok:
+        raise ValueError(message)
+    task._llm_params = params
+    return config
 
 
 def _resolve_secret(value: Any) -> str:
@@ -609,6 +602,7 @@ def _persist_success(
     previous_report_row_count: int,
     llm_config: LLMConfig | None,
     latency_ms: float,
+    run_metadata: dict[str, Any] | None = None,
 ) -> None:
     serialized_history = serialize_history(thread.history)
     state_snapshot = serialize_state(thread.state)
@@ -690,6 +684,18 @@ def _persist_success(
             },
         )
 
+        log_model_usage(
+            task.user,
+            llm_config.id if llm_config else None,
+            f"research-{task.id}-{run_number}",
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=int(latency_ms or 0),
+            usage_type="GENERAL" if create_report else "FOLLOWUP",
+        )
+
+        _sync_report_followup_answer(run_metadata, effective_output)
+
 
 def _persist_failure(
     task: ResearchTask | None,
@@ -739,6 +745,18 @@ def _persist_failure(
             "run_number": run_number,
         },
     )
+
+
+def _sync_report_followup_answer(
+    run_metadata: dict[str, Any] | None,
+    answer: str,
+) -> None:
+    followup_id = (run_metadata or {}).get("report_followup_id")
+    if not followup_id:
+        return
+    from reports.models.citation import ReportFollowup
+
+    ReportFollowup.objects.filter(pk=followup_id).update(answer=answer)
 
 
 def _persist_cancelled(

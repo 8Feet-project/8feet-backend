@@ -8,6 +8,7 @@ from research.api.research_api import (
     cancel_research_task,
     create_task,
     intervene_task,
+    task_collection,
     task_detail,
     task_followup,
     task_history,
@@ -16,7 +17,7 @@ from research.api.research_api import (
 )
 
 urlpatterns = [
-    path('tasks', task_list, name='research-task-list'),
+    path('tasks', task_collection, name='research-task-collection'),
     path('task', create_task, name='research-task-create'),
     path('tasks/<int:task_id>', task_detail, name='research-task-detail'),
     path('tasks/<int:task_id>/cancel', cancel_research_task, name='research-task-cancel'),
