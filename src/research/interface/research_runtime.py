@@ -415,6 +415,7 @@ def _record_event(task_id: int, run_number: int, event: dict[str, Any]) -> None:
     if task.status == STATUS_CANCELLED:
         raise TaskCancelledError("任务已被取消")
 
+    _mark_matching_tool_call_completed(task_id, run_number, event)
     step_name, step_status, detail = _event_to_step(event, run_number)
     TaskStepLog.objects.create(
         task=task,
@@ -431,6 +432,48 @@ def _record_event(task_id: int, run_number: int, event: dict[str, Any]) -> None:
         progress=progress,
         updated_at=timezone.now(),
     )
+
+
+def _mark_matching_tool_call_completed(task_id: int, run_number: int, event: dict[str, Any]) -> None:
+    event_type = str(event.get("type", "") or "")
+    if event_type not in {"tool_result", "subagent_tool_result"}:
+        return
+
+    tool_name = str(event.get("name", "") or "")
+    if not tool_name:
+        return
+
+    actor = str(event.get("subagent_id") or "").strip()
+    prefix = f"[{actor}] " if actor else ""
+    expected_step_name = f"{prefix}调用工具: {tool_name}"
+    call_event_type = "subagent_tool_call" if event_type == "subagent_tool_result" else "tool_call"
+    tool_call_id = str(event.get("id", "") or "").strip()
+
+    candidates = (
+        TaskStepLog.objects
+        .filter(
+            task_id=task_id,
+            step_name=expected_step_name,
+            step_status="RUNNING",
+            detail__run_number=run_number,
+            detail__event_type=call_event_type,
+        )
+        .order_by("-id")
+    )
+    if tool_call_id:
+        candidates = candidates.filter(detail__id=tool_call_id)
+
+    call_log = candidates.first()
+    if call_log is None:
+        return
+
+    detail = dict(call_log.detail or {})
+    detail["completed_by_event_type"] = event_type
+    if tool_call_id:
+        detail["completed_by_tool_call_id"] = tool_call_id
+    call_log.detail = detail
+    call_log.step_status = "COMPLETED"
+    call_log.save(update_fields=["step_status", "detail"])
 
 
 def _event_to_step(
@@ -457,6 +500,7 @@ def _event_to_step(
             "RUNNING",
             {
                 "args": json_safe(event.get("args", {})),
+                "id": str(event.get("id", "") or ""),
                 "run_number": run_number,
                 "event_type": event_type,
             },
@@ -468,6 +512,7 @@ def _event_to_step(
             {
                 "content": json_safe(event.get("content")),
                 "citation_keys": json_safe(event.get("citation_keys", [])),
+                "id": str(event.get("id", "") or ""),
                 "run_number": run_number,
                 "event_type": event_type,
             },
