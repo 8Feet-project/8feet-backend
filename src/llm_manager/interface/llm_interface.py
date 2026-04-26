@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import os
 from decimal import Decimal
+from time import perf_counter
 from typing import Any, Optional
 from uuid import uuid4
 
+from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import Q
 
 from llm_manager.models.llm_config import LLMConfig
@@ -41,6 +44,14 @@ def normalize_usage_type(value: str | None) -> str:
     return str(value or USAGE_TYPE_GENERAL).strip().upper() or USAGE_TYPE_GENERAL
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def create_or_update_llm_config(
     name: str,
     provider: str,
@@ -56,9 +67,13 @@ def create_or_update_llm_config(
     is_enabled: bool = True,
     is_online: bool = True,
 ) -> tuple[bool, Optional[str], Optional[int]]:
-    """创建或更新大模型配置。model_id 是供应商模型名，API 对外 ID 使用主键。"""
+    """创建或更新大模型配置。
+
+    前端只提供 model_name，因此当前契约下 model_name 同时作为展示名和
+    AI 运行时传给 provider 的模型名；API 对外 model_id 使用数据库主键。
+    """
     if not name or not provider or not model_id:
-        return (False, "name, provider, model_id 均为必填项", None)
+        return (False, "model_name, provider 均为必填项", None)
 
     config, _ = LLMConfig.objects.update_or_create(
         provider=provider,
@@ -73,20 +88,104 @@ def create_or_update_llm_config(
             'output_price_1m': Decimal(str(output_price_1m or 0)),
             'params': params or {},
             'description': description,
-            'is_enabled': bool(is_enabled),
-            'is_online': bool(is_online),
+            'is_enabled': _coerce_bool(is_enabled, True),
+            'is_online': _coerce_bool(is_online, True),
         },
     )
     return (True, None, config.id)
 
 
-def toggle_llm_config(config_id: int, is_enabled: bool) -> tuple[bool, str | None]:
+def update_llm_config(config_id: int, payload: dict) -> tuple[bool, str | None, list[str]]:
+    """按前端 PATCH 契约更新模型配置。"""
+    config = LLMConfig.objects.filter(pk=config_id).first()
+    if not config:
+        return (False, "模型不存在", [])
+
+    updated_fields: list[str] = []
+    field_map = {
+        "provider": "provider",
+        "api_base_url": "api_endpoint",
+        "api_endpoint": "api_endpoint",
+    }
+    if "model_name" in payload and payload.get("model_name") is not None:
+        value = str(payload.get("model_name") or "").strip()
+        if not value:
+            return (False, "model_name 不能为空", [])
+        config.name = value
+        config.model_id = value
+        updated_fields.append("model_name")
+    elif "name" in payload and payload.get("name") is not None:
+        value = str(payload.get("name") or "").strip()
+        if not value:
+            return (False, "name 不能为空", [])
+        config.name = value
+        config.model_id = value
+        updated_fields.append("name")
+
+    for incoming, model_field in field_map.items():
+        if incoming in payload and payload.get(incoming) is not None:
+            value = str(payload.get(incoming) or "").strip()
+            if model_field == "provider" and not value:
+                return (False, f"{incoming} 不能为空", [])
+            setattr(config, model_field, value)
+            updated_fields.append(incoming)
+
+    if payload.get("api_key"):
+        config.api_key_encrypted = str(payload.get("api_key")).strip()
+        updated_fields.append("api_key")
+
+    if "context_window" in payload and payload.get("context_window") is not None:
+        config.context_window = int(payload.get("context_window") or 4096)
+        updated_fields.append("context_window")
+
+    if "max_output_tokens" in payload and payload.get("max_output_tokens") is not None:
+        config.max_output_tokens = int(payload.get("max_output_tokens") or 2048)
+        updated_fields.append("max_output_tokens")
+
+    if "enabled" in payload or "is_enabled" in payload:
+        config.is_enabled = _coerce_bool(payload.get("enabled", payload.get("is_enabled")))
+        updated_fields.append("enabled")
+
+    params = dict(config.params or {})
+    if isinstance(payload.get("params"), dict):
+        params.update(payload["params"])
+        updated_fields.append("params")
+    if "temperature" in payload and payload.get("temperature") is not None:
+        params["temperature"] = float(payload.get("temperature"))
+        updated_fields.append("temperature")
+    config.params = params
+
+    if "input_price_1m" in payload:
+        config.input_price_1m = Decimal(str(payload.get("input_price_1m") or 0))
+        updated_fields.append("input_price_1m")
+    if "output_price_1m" in payload:
+        config.output_price_1m = Decimal(str(payload.get("output_price_1m") or 0))
+        updated_fields.append("output_price_1m")
+    if "description" in payload:
+        config.description = payload.get("description")
+        updated_fields.append("description")
+
+    if not updated_fields:
+        return (True, None, [])
+
+    config.save()
+    return (True, None, sorted(set(updated_fields)))
+
+
+def delete_llm_config(config_id: int) -> tuple[bool, str | None]:
     config = LLMConfig.objects.filter(pk=config_id).first()
     if not config:
         return (False, "模型不存在")
-    config.is_enabled = bool(is_enabled)
-    config.save(update_fields=['is_enabled', 'updated_at'])
+    config.delete()
     return (True, None)
+
+
+def toggle_llm_config(config_id: int, is_enabled: bool) -> tuple[bool, str | None]:
+    success, message, _updated_fields = update_llm_config(
+        config_id,
+        {"enabled": _coerce_bool(is_enabled)},
+    )
+    return (success, message)
 
 
 def user_role(user) -> str:
@@ -157,35 +256,180 @@ def serialize_model_available(config: LLMConfig) -> dict:
 
 
 def serialize_model_detail(config: LLMConfig) -> dict:
+    params = config.params or {}
     return {
         "id": config.id,
         "model_id": str(config.id),
-        "provider_model_id": config.model_id,
         "name": config.name,
         "model_name": config.name,
         "provider": config.provider,
         "api_endpoint": config.api_endpoint,
+        "api_base_url": config.api_endpoint or "",
         "context_window": config.context_window,
         "max_output_tokens": config.max_output_tokens,
+        "temperature": float(params.get("temperature", 0.2)),
         "pricing": {
             "input": float(config.input_price_1m),
             "output": float(config.output_price_1m),
         },
-        "params": config.params or {},
+        "params": params,
         "is_enabled": config.is_enabled,
+        "enabled": config.is_enabled,
         "is_online": config.is_online,
+        "connectivity_status": _connectivity_status(config),
+        "granted_scope_summary": _grant_scope_summary(config),
         "description": config.description,
         "created_at": config.created_at.isoformat() if config.created_at else None,
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
     }
 
 
+def _connectivity_status(config: LLMConfig) -> str:
+    if not config.is_enabled:
+        return "unknown"
+    return "connected" if config.is_online else "failed"
+
+
+def _grant_scope_summary(config: LLMConfig) -> str:
+    active = config.user_permissions.filter(is_active=True)
+    user_count = active.filter(user__isnull=False).count()
+    roles = list(
+        active.filter(role__isnull=False)
+        .exclude(role="")
+        .values_list("role", flat=True)
+        .distinct()
+    )
+    if not user_count and not roles:
+        return "未分配"
+    parts = []
+    if user_count:
+        parts.append(f"{user_count} 个用户")
+    if roles:
+        parts.append(f"{len(roles)} 个用户组")
+    return "、".join(parts)
+
+
+def serialize_admin_model_item(config: LLMConfig) -> dict:
+    params = config.params or {}
+    return {
+        "model_id": str(config.id),
+        "model_name": config.name,
+        "provider": config.provider,
+        "api_base_url": config.api_endpoint or "",
+        "context_window": config.context_window,
+        "temperature": float(params.get("temperature", 0.2)),
+        "enabled": config.is_enabled,
+        "connectivity_status": _connectivity_status(config),
+        "updated_at": config.updated_at.isoformat() if config.updated_at else "",
+        "granted_scope_summary": _grant_scope_summary(config),
+    }
+
+
 def list_llm_configs(is_enabled: bool = None) -> list[dict]:
     """获取大模型配置列表，管理端使用。"""
-    query = LLMConfig.objects.all().order_by('id')
+    query = LLMConfig.objects.all().prefetch_related('user_permissions').order_by('id')
     if is_enabled is not None:
         query = query.filter(is_enabled=is_enabled)
-    return [serialize_model_detail(config) for config in query]
+    return [serialize_admin_model_item(config) for config in query]
+
+
+def test_llm_config_connection(config_id: int) -> tuple[bool, str | None, dict | None]:
+    """校验模型运行时必需配置，并更新在线状态。
+
+    这里不直接请求第三方模型，避免管理端保存动作因外部网络阻塞；真实调用仍由
+    research runtime 使用 get_provider_runtime_config 后进入 provider SDK。
+    """
+    config = LLMConfig.objects.filter(pk=config_id).first()
+    if not config:
+        return (False, "模型不存在", None)
+    started = perf_counter()
+    ok, message, _runtime = get_provider_runtime_config(config)
+    latency_ms = max(int((perf_counter() - started) * 1000), 1)
+    config.is_online = bool(ok)
+    config.save(update_fields=["is_online", "updated_at"])
+    return (
+        True,
+        None,
+        {
+            "model_id": str(config.id),
+            "success": bool(ok),
+            "latency_ms": latency_ms,
+            "message": "模型配置完整，可进入运行时调用" if ok else message,
+        },
+    )
+
+
+GROUP_ROLE_ALIASES = {
+    "group-admin": "admin",
+    "admin": "admin",
+    "admin_group": "admin",
+    "group-user": "user",
+    "user": "user",
+    "user_group": "user",
+    "group-research": "user",
+    "research": "user",
+    "group-super-admin": "super_admin",
+    "super_admin": "super_admin",
+    "super_admin_group": "super_admin",
+}
+
+
+def _resolve_user_id(raw: Any):
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    suffix = text.rsplit("-", 1)[-1]
+    return int(suffix) if suffix.isdigit() else None
+
+
+def assign_model_permissions(
+    config_id: int,
+    user_ids: list[Any] | None = None,
+    group_ids: list[Any] | None = None,
+) -> tuple[bool, str | None, int]:
+    """覆盖式分配模型权限，兼容前端 user_ids/group_ids 字段。"""
+    config = LLMConfig.objects.filter(pk=config_id).first()
+    if not config:
+        return (False, "模型不存在", 0)
+
+    User = get_user_model()
+    resolved_user_ids = [
+        user_id for user_id in (_resolve_user_id(value) for value in (user_ids or []))
+        if user_id is not None
+    ]
+    users = list(User.objects.filter(pk__in=resolved_user_ids))
+
+    roles = []
+    for group_id in group_ids or []:
+        role = GROUP_ROLE_ALIASES.get(str(group_id or "").strip())
+        if role and role not in roles:
+            roles.append(role)
+
+    if not users and not roles:
+        return (False, "未找到有效的授权用户或用户组", 0)
+
+    with transaction.atomic():
+        ModelPermission.objects.filter(llm_config=config).delete()
+        for user in users:
+            ModelPermission.objects.create(
+                llm_config=config,
+                user=user,
+                is_active=True,
+                daily_quota=100,
+                priority_weight=1,
+            )
+        for role in roles:
+            ModelPermission.objects.create(
+                llm_config=config,
+                role=role,
+                is_active=True,
+                daily_quota=100,
+                priority_weight=1,
+            )
+
+    return (True, None, len(users) + len(roles))
 
 
 def list_available_models(

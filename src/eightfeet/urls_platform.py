@@ -108,7 +108,10 @@ def initialize(request):
 
     selected_model = None
     if default_model_id:
-        selected_model = LLMConfig.objects.filter(model_id=default_model_id).first()
+        try:
+            selected_model = LLMConfig.objects.filter(pk=int(default_model_id)).first()
+        except (TypeError, ValueError):
+            selected_model = None
         if selected_model is None:
             return _json_error("default_model_id 不存在")
 
@@ -120,7 +123,7 @@ def initialize(request):
             super_admin_profile,
             message="平台已初始化，已存在超级管理员",
             site_name=site_name,
-            default_model_id=selected_model.model_id if selected_model else default_model_id or None,
+            default_model_id=str(selected_model.id) if selected_model else default_model_id or None,
             admin_email=super_admin_profile.user.email,
         )
 
