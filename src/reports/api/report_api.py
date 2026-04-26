@@ -38,7 +38,7 @@ def report_detail(request: HttpRequest, report_id: int):
     if not data:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "报告不存在")
 
-    return success_api_response(data)
+    return success_api_response(_serialize_report_detail(data))
 
 
 @response_wrapper
@@ -57,7 +57,7 @@ def report_list(request: HttpRequest):
         reports = list_user_reports(request.user.id, object_type)
         
     return success_api_response({
-        "list": reports,
+        "list": [_serialize_report_list_item(report) for report in reports],
         "total": len(reports)
     })
 
@@ -273,6 +273,21 @@ def _serialize_citation(citation):
         "citation_id": str(citation.id),
         "source_title": citation.source_title,
         "source_url": citation.source_url,
+    }
+
+
+def _isoformat(value):
+    return value.isoformat() if hasattr(value, "isoformat") else (value or "")
+
+
+def _serialize_report_list_item(report: dict):
+    return {
+        "report_id": str(report.get("id") or report.get("report_id") or ""),
+        "task_id": str(report.get("task_id") or ""),
+        "title": report.get("title") or "",
+        "summary": report.get("summary") or "",
+        "created_at": _isoformat(report.get("created_at")),
+        "updated_at": _isoformat(report.get("updated_at")),
     }
 
 

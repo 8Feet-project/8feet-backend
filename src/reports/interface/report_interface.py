@@ -35,6 +35,7 @@ def get_report_detail(report_id: int, report_mode: str = 'full') -> Optional[dic
 
     return {
         "id": report.id,
+        "task_id": report.task_id,
         "title": report.title,
         "summary": report.summary,
         "content_markdown": report.content_markdown,
@@ -52,7 +53,7 @@ def get_report_detail(report_id: int, report_mode: str = 'full') -> Optional[dic
 def list_reports_by_task(task_id: int) -> List[dict]:
     """获取某任务的所有报告版本"""
     return list(Report.objects.filter(task_id=task_id).values(
-        'id', 'title', 'version', 'is_latest', 'created_at'
+        'id', 'task_id', 'title', 'summary', 'version', 'is_latest', 'created_at'
     ))
 
 
@@ -85,7 +86,7 @@ def list_user_reports(user_id: int, object_type: str = None) -> List[dict]:
         query = query.filter(task__object_type=object_type)
 
     return list(query.values(
-        'id', 'title', 'task__object_name', 'task__object_type',
+        'id', 'task_id', 'title', 'summary', 'task__object_name', 'task__object_type',
         'version', 'created_at'
     ))
 
