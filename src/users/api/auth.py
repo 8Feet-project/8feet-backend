@@ -14,6 +14,7 @@ from shared.utils import (
     ErrorCode, failed_api_response, response_wrapper,
     success_api_response, jwt_auth
 )
+from shared.permissions import to_product_permission_codes
 from users.interface.auth_interface import (
     authenticate_by_username, authenticate_by_email, refresh_access_token, register_user,
     send_verification_email, verify_email_code, verify_email_code_for_scene, request_password_reset,
@@ -33,7 +34,7 @@ def _serialize_current_user(user):
         "phone": profile.phone if profile else None,
         "avatar_url": profile.avatar if profile else None,
         "role": profile.role if profile else "user",
-        "permissions": list(user.get_all_permissions()),
+        "permissions": to_product_permission_codes(user.get_all_permissions()),
         "email_verified": profile.email_verified if profile else False,
         "last_login_at": user.last_login.isoformat() if user.last_login else None
     }

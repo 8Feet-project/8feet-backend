@@ -8,6 +8,7 @@ from django.contrib import admin
 from django.urls import path, include
 from eightfeet.health import healthz, readyz
 from llm_manager.api.llm_api import available_models
+from users.api.user_api import current_permissions
 
 urlpatterns = [
     path('healthz', healthz),
@@ -20,6 +21,7 @@ urlpatterns = [
         path('auth/', include('users.urls.urls_auth')),
         path('users/', include('users.urls.urls_user')),
         path('admin/users/', include('users.urls.urls_admin')),
+        path('admin/permissions/current', current_permissions, name='admin-current-permissions'),
         # 平台初始化
         path('platform/', include('eightfeet.urls_platform')),
         # 大模型管理 (管理端)
