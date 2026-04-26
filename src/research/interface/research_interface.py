@@ -50,6 +50,19 @@ def _safe_research_runtime():
         return (None, message)
 
 
+def _frontend_status(status: str) -> str:
+    return (status or STATUS_PENDING).lower()
+
+
+def _frontend_object_type(object_type: str) -> str:
+    return {
+        "COMPANY": "company",
+        "STOCK": "stock",
+        "PRODUCT": "commodity",
+        "COMMODITY": "commodity",
+    }.get(object_type or "", (object_type or "company").lower())
+
+
 def create_research_task(
     user_id: int,
     title: str,
@@ -221,10 +234,11 @@ def list_user_tasks(user_id: int) -> List[dict]:
         results.append(
             {
                 "id": task.id,
+                "task_id": str(task.id),
                 "title": task.title,
                 "object_name": task.object_name,
-                "object_type": task.object_type,
-                "status": task.status,
+                "object_type": _frontend_object_type(task.object_type),
+                "status": _frontend_status(task.status),
                 "progress": task.progress,
                 "created_at": task.created_at.isoformat(),
                 "updated_at": task.updated_at.isoformat(),
