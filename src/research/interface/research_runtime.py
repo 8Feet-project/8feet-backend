@@ -87,6 +87,13 @@ def build_research_system_message() -> str:
         "优先使用结构化业务数据工具和搜索工具收集证据，再输出中文 Markdown 结果。"
         "所有结论都必须以已检索到的事实为基础，避免无依据推断。"
         "当工具返回 citation key 时，请在对应结论里保留类似 [@cite_key] 的引用标记。"
+        "对于复杂深度调研，采用 evidence dossier 两阶段工作流："
+        "第一阶段先调用多个 deep-search 类型 task，从不同角度发散搜索、筛选噪声，"
+        "并让子代理把可引用证据沉淀到 /mnt/user-data/workspace/evidence 文件中，返回路径和概述；"
+        "第二阶段基于这些 evidence 文件和概述，调用多个 researcher 类型 task，"
+        "分别形成观点、收集证据论证或证伪，并以 message 返回调研报告。"
+        "最后由你综合所有证据和子代理报告，写入最终 Markdown 报告文件并调用 present_report。"
+        "不要让子代理产出最终报告文件；最终报告文件只能由 Lead Agent 定稿。"
     )
 
 
