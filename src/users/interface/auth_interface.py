@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from users.models.auth_record import AuthRecord
 from users.models.user_profile import UserProfile, ROLE_SUPER_ADMIN, ROLE_USER
+from shared.permissions import to_product_permission_codes
 
 
 def generate_access_token(user_id: int, access_token_delta: int = 3) -> str:
@@ -153,7 +154,7 @@ def _perform_login(user, password) -> Tuple[bool, Optional[str], Optional[dict]]
         "user_id": user.id,
         "nickname": profile.nickname if profile else user.get_full_name(),
         "role": profile.role if profile else "user",
-        "permissions": list(user.get_all_permissions()),
+        "permissions": to_product_permission_codes(user.get_all_permissions()),
         **tokens
     }
     return True, None, data
