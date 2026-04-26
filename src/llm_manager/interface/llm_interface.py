@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from decimal import Decimal
 from typing import Any, Optional
+from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 from django.db.models import Q
@@ -39,6 +40,24 @@ def normalize_object_type(value: str | None) -> str:
 
 def normalize_usage_type(value: str | None) -> str:
     return str(value or USAGE_TYPE_GENERAL).strip().upper() or USAGE_TYPE_GENERAL
+
+
+def normalize_provider_base_url(provider: str | None, base_url: str | None) -> str:
+    """Normalize known OpenAI-compatible provider dashboard URLs to API base URLs."""
+    text = str(base_url or "").strip().rstrip("/")
+    if not text:
+        return ""
+
+    parsed = urlparse(text)
+    provider_name = str(provider or "").strip().lower()
+    if "meteor" not in provider_name:
+        return text
+    if not parsed.scheme or not parsed.netloc:
+        return text
+    if parsed.path not in ("", "/"):
+        return text
+
+    return urlunparse(parsed._replace(path="/v1"))
 
 
 def create_or_update_llm_config(
@@ -326,6 +345,7 @@ def get_provider_runtime_config(
         or resolve_env_name(params.get("api_endpoint_env"))
         or resolve_env_name(params.get("base_url_env"))
     )
+    base_url = normalize_provider_base_url(config.provider, base_url)
     if not config.model_id or not api_key or not base_url:
         return (False, "选定模型缺少 model_id / api_key / api_endpoint 配置", {})
     return (
