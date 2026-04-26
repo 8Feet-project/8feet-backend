@@ -107,8 +107,23 @@ def create_followup(
         user_id=user_id,
         question=question,
         context_paragraph=context_paragraph,
-        answer=None,  # TODO: 后续集成 LLM 回答
+        answer=None,
     )
+    from research.interface.research_interface import continue_task_conversation
+
+    prompt = question
+    if context_paragraph:
+        prompt = f"请优先围绕以下报告段落回答。\n\n{context_paragraph}\n\n问题:\n{question}"
+    success, message = continue_task_conversation(
+        report.task_id,
+        user_id,
+        prompt,
+        run_metadata={"report_followup_id": followup.id},
+    )
+    if not success:
+        followup.answer = f"追问任务启动失败: {message}"
+        followup.save(update_fields=['answer'])
+        return (False, message, None)
     return (True, None, followup.id)
 
 

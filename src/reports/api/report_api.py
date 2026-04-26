@@ -129,14 +129,34 @@ def export_status(request: HttpRequest, export_id: int):
 
 
 @response_wrapper
-@require_POST
 @jwt_auth(perms=['reports.followup_report'])
 def followup_question(request: HttpRequest, report_id: int):
     """报告深度追问
     [route]: POST /api/v1/reports/{report_id}/qa
     """
-    question = request.POST.get('question')
-    context_paragraph = request.POST.get('context_paragraph')
+    from reports.models.citation import ReportFollowup
+
+    if request.method == 'GET':
+        rows = [
+            _serialize_followup(item)
+            for item in ReportFollowup.objects.filter(report_id=report_id, user=request.user)
+        ]
+        return success_api_response({
+            "report_id": str(report_id),
+            "list": rows,
+            "total": len(rows),
+        })
+
+    if request.method != 'POST':
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "不支持的请求方法")
+
+    try:
+        payload = json.loads(request.body) if request.body else {}
+    except Exception:
+        payload = request.POST
+
+    question = payload.get('question')
+    context_paragraph = payload.get('context_paragraph')
 
     if not question:
         return failed_api_response(
@@ -148,4 +168,19 @@ def followup_question(request: HttpRequest, report_id: int):
     if not success:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, message)
 
-    return success_api_response({"qa_id": followup_id, "answer": "mocked answer"})
+    followup = ReportFollowup.objects.get(pk=followup_id)
+    return success_api_response({
+        "report_id": str(report_id),
+        "qa": _serialize_followup(followup),
+    })
+
+
+def _serialize_followup(followup):
+    return {
+        "qa_id": str(followup.id),
+        "question": followup.question,
+        "answer": followup.answer or "",
+        "status": "completed" if followup.answer else "pending",
+        "created_at": followup.created_at.isoformat(),
+        "updated_at": followup.created_at.isoformat(),
+    }
