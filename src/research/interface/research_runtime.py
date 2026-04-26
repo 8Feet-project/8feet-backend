@@ -61,7 +61,25 @@ from research.models import (
     TaskStepLog,
 )
 
-DEFAULT_MAX_TURNS = 18
+DEFAULT_MAX_TURNS = 10
+STANDARD_TOOL_LIMITS = {
+    "web_search": 5,
+    "web_fetch": 6,
+    "task": 0,
+    "bash": 0,
+}
+QUICK_TOOL_LIMITS = {
+    "web_search": 3,
+    "web_fetch": 4,
+    "task": 0,
+    "bash": 0,
+}
+DEEP_TOOL_LIMITS = {
+    "web_search": 12,
+    "web_fetch": 16,
+    "task": 4,
+    "bash": 2,
+}
 MAX_WORKERS = 4
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / '.env')
@@ -82,18 +100,91 @@ class TaskCancelledError(RuntimeError):
 def build_research_system_message() -> str:
     """统一的 research agent system prompt。"""
     return (
-        "你是 8Feet 商业对象智能深度调研分析助手。"
-        "你的目标是围绕公司、股票、商品三类对象开展可追溯的深度研究。"
-        "优先使用结构化业务数据工具和搜索工具收集证据，再输出中文 Markdown 结果。"
+        "你是 8Feet 商业对象智能调研分析助手。"
+        "你的目标是围绕公司、股票、商品三类对象开展有限、可追溯的商业调研。"
+        "默认采用标准调研模式：先少量补充证据，再尽快输出中文 Markdown 结果。"
         "所有结论都必须以已检索到的事实为基础，避免无依据推断。"
         "当工具返回 citation key 时，请在对应结论里保留类似 [@cite_key] 的引用标记。"
-        "对于复杂深度调研，采用 evidence dossier 两阶段工作流："
-        "第一阶段先调用多个 deep-search 类型 task，从不同角度发散搜索、筛选噪声，"
-        "并让子代理把可引用证据沉淀到 /mnt/user-data/workspace/evidence 文件中，返回路径和概述；"
-        "第二阶段基于这些 evidence 文件和概述，调用多个 researcher 类型 task，"
-        "分别形成观点、收集证据论证或证伪，并以 message 返回调研报告。"
-        "最后由你综合所有证据和子代理报告，写入最终 Markdown 报告文件并调用 present_report。"
-        "不要让子代理产出最终报告文件；最终报告文件只能由 Lead Agent 定稿。"
+        "除非用户或任务参数明确要求 deep 深度模式，否则不要启动子代理、不要执行 evidence dossier 多阶段工作流。"
+        "当已有 3 个以上可用来源，或工具调用接近预算时，必须停止继续检索并生成报告。"
+        "如果来源不足或部分工具失败，不要反复换关键词重试，请在风险与不确定性中说明。"
+        "最终报告文件只能由 Lead Agent 定稿，并在写入后调用 present_report。"
+        "不要让子代理产出最终报告文件。"
+    )
+
+
+def _normalize_research_depth(search_params: dict[str, Any] | None) -> str:
+    params = search_params or {}
+    depth = str(params.get("research_depth") or params.get("depth") or "standard").strip().lower()
+    if depth in {"quick", "fast", "lite"}:
+        return "quick"
+    if depth in {"deep", "advanced", "full"}:
+        return "deep"
+    return "standard"
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _tool_limit(params: dict[str, Any], key: str, default: int) -> int:
+    value = params.get(f"max_{key}_calls", params.get(f"{key}_max_calls", default))
+    if key == "task":
+        value = params.get("max_subagent_calls", params.get("subagent_max_calls", value))
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _resolve_tool_limits(search_params: dict[str, Any] | None) -> dict[str, int]:
+    params = search_params or {}
+    depth = _normalize_research_depth(params)
+    defaults = {
+        "quick": QUICK_TOOL_LIMITS,
+        "deep": DEEP_TOOL_LIMITS,
+    }.get(depth, STANDARD_TOOL_LIMITS)
+
+    limits = {
+        key: _tool_limit(params, key, default)
+        for key, default in defaults.items()
+    }
+    enable_subagents = params.get("enable_subagents")
+    if enable_subagents is False or str(enable_subagents).strip().lower() in {"0", "false", "no", "off"}:
+        limits["task"] = 0
+    return limits
+
+
+def _build_execution_constraints(search_params: dict[str, Any] | None) -> str:
+    params = search_params or {}
+    depth = _normalize_research_depth(params)
+    limits = _resolve_tool_limits(params)
+    min_sources = _env_int("RESEARCH_MIN_SOURCES_BEFORE_REPORT", 3)
+    mode_name = {
+        "quick": "快速调研",
+        "deep": "深度调研",
+    }.get(depth, "标准调研")
+    subagent_rule = (
+        "仅在确有必要时才允许启动子代理。"
+        if limits["task"] > 0
+        else "禁止启动子代理，不要调用 task 工具。"
+    )
+    return (
+        "执行约束:\n"
+        f"- 当前模式: {mode_name}。\n"
+        f"- web_search 最多调用 {limits['web_search']} 次。\n"
+        f"- web_fetch 最多调用 {limits['web_fetch']} 次。\n"
+        f"- task 子代理最多调用 {limits['task']} 次，{subagent_rule}\n"
+        f"- bash 最多调用 {limits['bash']} 次；普通网页调研不要调用 bash。\n"
+        f"- 一旦获得 {min_sources} 个以上可用来源，必须停止继续检索并生成最终 Markdown 报告。\n"
+        "- 如果搜索失败、网页不可访问或证据不足，不要反复扩大关键词范围，请在“风险与不确定性”中说明。\n"
+        "- 工具预算接近耗尽时，禁止继续调用工具，直接基于已有证据输出阶段性最终报告。\n"
     )
 
 
@@ -105,15 +196,17 @@ def build_initial_prompt(task: ResearchTask) -> str:
         indent=2,
     )
     return (
-        "请围绕以下商业对象开展一次深度调研，并输出结构化 Markdown 报告。\n\n"
+        "请围绕以下商业对象开展一次商业调研，并输出结构化 Markdown 报告。\n\n"
         f"- 调研标题: {task.title}\n"
         f"- 调研对象: {task.object_name}\n"
         f"- 对象类型: {task.object_type}\n"
         "- 任务要求:\n"
-        "  1. 先明确调研思路，再主动调用必要工具补充证据。\n"
-        "  2. 尽量覆盖对象概况、近期动态、行业/市场位置、主要风险与不确定性。\n"
+        "  1. 先明确调研思路，再按执行约束少量调用必要工具补充证据。\n"
+        "  2. 覆盖对象概况、近期动态、行业/市场位置、主要风险与不确定性。\n"
         "  3. 优先引用高可信来源；如果结论来自带有引用键的信息源，请在结论后保留引用键。\n"
-        "  4. 最终输出包含：摘要、核心发现、关键证据、风险与不确定性、结论与建议。\n\n"
+        "  4. 最终输出包含：摘要、核心发现、关键证据、风险与不确定性、结论与建议。\n"
+        "  5. 不要为了追求完整性无限检索；证据不足时说明不确定性并完成报告。\n\n"
+        f"{_build_execution_constraints(task.search_params)}\n"
         f"补充检索参数:\n```json\n{search_params}\n```"
     )
 
@@ -389,10 +482,14 @@ def _env_first(*names: str) -> str:
 
 def _resolve_max_turns(search_params: dict[str, Any] | None) -> int:
     params = search_params or {}
+    default_by_depth = {
+        "quick": 6,
+        "deep": 18,
+    }.get(_normalize_research_depth(params), DEFAULT_MAX_TURNS)
     try:
-        value = int(params.get("max_turns", DEFAULT_MAX_TURNS))
+        value = int(params.get("max_turns", default_by_depth))
     except (TypeError, ValueError):
-        value = DEFAULT_MAX_TURNS
+        value = default_by_depth
     return min(max(value, 6), 40)
 
 
