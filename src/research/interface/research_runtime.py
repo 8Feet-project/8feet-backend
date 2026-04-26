@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 
 from efeet import (
     SandboxPaths,
+    STOPPED_MESSAGE,
     create_chat_model,
     create_thread,
     extract_presented_report_event,
@@ -761,6 +762,12 @@ def _persist_success(
         serialized_history=serialized_history,
         create_report=create_report,
     )
+    effective_output = _recover_report_output_from_tool_logs(
+        task=task,
+        run_number=run_number,
+        effective_output=effective_output,
+        create_report=create_report,
+    )
     citations = _extract_citations(state_snapshot)
     presented_reports = extract_presented_reports(state_snapshot)
     has_new_presented_report_content = any(
@@ -844,6 +851,42 @@ def _persist_success(
         )
 
         _sync_report_followup_answer(run_metadata, effective_output)
+
+
+def _recover_report_output_from_tool_logs(
+    *,
+    task: ResearchTask,
+    run_number: int,
+    effective_output: str,
+    create_report: bool,
+) -> str:
+    """Use a pending write_file markdown payload when max-turns stops before present_report."""
+    if not create_report or (effective_output or "").strip() != STOPPED_MESSAGE:
+        return effective_output
+
+    rows = (
+        TaskStepLog.objects
+        .filter(
+            task=task,
+            step_name="调用工具: write_file",
+            detail__run_number=run_number,
+        )
+        .order_by("-id")
+    )
+    for row in rows:
+        detail = row.detail if isinstance(row.detail, dict) else {}
+        args = detail.get("args")
+        if not isinstance(args, dict):
+            continue
+        path = str(args.get("path", "") or "").lower()
+        content = args.get("content")
+        if (
+            isinstance(content, str)
+            and content.strip()
+            and path.endswith((".md", ".markdown", ".txt"))
+        ):
+            return content.strip()
+    return effective_output
 
 
 def _persist_failure(
