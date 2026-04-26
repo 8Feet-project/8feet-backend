@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import List, Optional, Tuple
 from uuid import uuid4
 
@@ -27,10 +28,26 @@ from research.models import (
 from research.models.task_step_log import TaskStepLog
 
 
+logger = logging.getLogger(__name__)
+
+
+def _fallback_system_message() -> str:
+    return "8Feet research runtime is not available in this deployment."
+
+
 def _research_runtime():
     from research.interface import research_runtime
 
     return research_runtime
+
+
+def _safe_research_runtime():
+    try:
+        return (_research_runtime(), None)
+    except ModuleNotFoundError as exc:
+        message = f"调研运行时依赖未安装: {exc.name}"
+        logger.warning(message)
+        return (None, message)
 
 
 def create_research_task(
@@ -81,20 +98,42 @@ def create_research_task(
         },
     )
 
+    runtime, runtime_error = _safe_research_runtime()
+
     ResearchConversation.objects.create(
         task=task,
         thread_id=str(uuid4()),
-        system_message=_research_runtime().build_research_system_message(),
+        system_message=(
+            runtime.build_research_system_message()
+            if runtime else _fallback_system_message()
+        ),
     )
 
     TaskStepLog.objects.create(
         task=task,
         step_name="任务已创建",
         step_status="COMPLETED",
-        detail={"message": f"调研任务 [{title}] 创建成功，准备启动 efeet 调研链路"},
+        detail={"message": f"调研任务 [{title}] 创建成功，准备启动调研链路"},
     )
 
-    runtime = _research_runtime()
+    if runtime is None:
+        TaskStepLog.objects.create(
+            task=task,
+            step_name="调研运行时未启动",
+            step_status="FAILED",
+            detail={
+                "error": runtime_error or "调研运行时不可用",
+                "message": "任务已保存，但当前环境缺少 research runtime 依赖，未启动异步调研。",
+            },
+        )
+        task.progress = {
+            **(task.progress or {}),
+            "stage": STATUS_PENDING,
+            "runtime_error": runtime_error,
+        }
+        task.save(update_fields=['progress', 'updated_at'])
+        return (True, None, task.id)
+
     success, message = runtime.enqueue_task_run(
         task.id,
         prompt=runtime.build_initial_prompt(task),
@@ -393,7 +432,10 @@ def continue_task_conversation(
     if _get_conversation(task) is None:
         return (False, "任务尚未初始化会话")
 
-    runtime = _research_runtime()
+    runtime, runtime_error = _safe_research_runtime()
+    if runtime is None:
+        return (False, runtime_error or "调研运行时不可用")
+
     success, error_message = runtime.enqueue_task_run(
         task.id,
         prompt=runtime.build_followup_prompt(message),
