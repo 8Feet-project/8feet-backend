@@ -11,4 +11,5 @@ urlpatterns = [
     path('', message_list, name='message-list'),
     path('<int:message_id>/read', mark_read, name='message-read'),
     path('read-all', mark_all_read, name='message-read-all'),
+    path('read-all/', mark_all_read, name='message-read-all-slash'),
 ]

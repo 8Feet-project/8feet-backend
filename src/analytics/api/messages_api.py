@@ -14,6 +14,16 @@ from analytics.interface.analytics_interface import (
 )
 
 
+def _serialize_message(item: dict) -> dict:
+    return {
+        "message_id": str(item.get("id")),
+        "title": item.get("title") or "",
+        "content": item.get("content") or "",
+        "read_status": bool(item.get("is_read")),
+        "created_at": item.get("created_at").isoformat() if hasattr(item.get("created_at"), "isoformat") else str(item.get("created_at") or ""),
+    }
+
+
 @response_wrapper
 @require_GET
 @jwt_auth()
@@ -25,11 +35,12 @@ def message_list(request: HttpRequest):
     messages = list_user_messages(request.user.id, only_unread)
     
     unread_count = sum(1 for m in messages if not m['is_read'])
+    serialized = [_serialize_message(item) for item in messages]
     
     return success_api_response({
-        "list": messages,
+        "list": serialized,
         "unread_count": unread_count,
-        "total": len(messages)
+        "total": len(serialized)
     })
 
 
@@ -43,7 +54,11 @@ def mark_read(request: HttpRequest, message_id: int = None):
     ids = [message_id] if message_id else None
     count = mark_messages_as_read(request.user.id, ids)
     
-    return success_api_response({"marked_count": count})
+    return success_api_response({
+        "message_id": str(message_id) if message_id else "",
+        "read_status": True,
+        "marked_count": count,
+    })
 
 
 @response_wrapper
@@ -54,4 +69,4 @@ def mark_all_read(request: HttpRequest):
     [route]: POST /api/v1/messages/read-all
     """
     count = mark_messages_as_read(request.user.id)
-    return success_api_response({"marked_count": count})
+    return success_api_response({"affected_count": count, "marked_count": count})

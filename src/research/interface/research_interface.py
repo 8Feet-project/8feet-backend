@@ -14,12 +14,6 @@ from llm_manager.interface.llm_interface import (
     normalize_object_type,
     resolve_user_model_config,
 )
-from research.interface.research_runtime import (
-    build_followup_prompt,
-    build_initial_prompt,
-    build_research_system_message,
-    enqueue_task_run,
-)
 from research.models import (
     ResearchConversation,
     ResearchConversationMessage,
@@ -31,6 +25,12 @@ from research.models import (
     STATUS_PENDING,
 )
 from research.models.task_step_log import TaskStepLog
+
+
+def _research_runtime():
+    from research.interface import research_runtime
+
+    return research_runtime
 
 
 def create_research_task(
@@ -84,7 +84,7 @@ def create_research_task(
     ResearchConversation.objects.create(
         task=task,
         thread_id=str(uuid4()),
-        system_message=build_research_system_message(),
+        system_message=_research_runtime().build_research_system_message(),
     )
 
     TaskStepLog.objects.create(
@@ -94,9 +94,10 @@ def create_research_task(
         detail={"message": f"调研任务 [{title}] 创建成功，准备启动 efeet 调研链路"},
     )
 
-    success, message = enqueue_task_run(
+    runtime = _research_runtime()
+    success, message = runtime.enqueue_task_run(
         task.id,
-        prompt=build_initial_prompt(task),
+        prompt=runtime.build_initial_prompt(task),
         create_report=True,
         queued_step_name="开始执行调研",
     )
@@ -392,9 +393,10 @@ def continue_task_conversation(
     if _get_conversation(task) is None:
         return (False, "任务尚未初始化会话")
 
-    success, error_message = enqueue_task_run(
+    runtime = _research_runtime()
+    success, error_message = runtime.enqueue_task_run(
         task.id,
-        prompt=build_followup_prompt(message),
+        prompt=runtime.build_followup_prompt(message),
         create_report=False,
         queued_step_name="开始处理追问",
         run_metadata=run_metadata or {},
