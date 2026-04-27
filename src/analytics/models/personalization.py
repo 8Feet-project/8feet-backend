@@ -26,8 +26,9 @@ class Favorite(models.Model):
     item_type = models.CharField(
         max_length=16, choices=ITEM_TYPE_CHOICES
     )
-    item_id = models.IntegerField(
-        help_text="收藏对象 ID (指向 ScrapedContent/Report/LLMConfig)"
+    item_id = models.CharField(
+        max_length=128,
+        help_text="收藏对象业务 ID (如 report-001/model-001)"
     )
     folder = models.CharField(
         max_length=128, null=True, blank=True,

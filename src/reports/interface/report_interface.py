@@ -66,6 +66,8 @@ def list_report_versions(report_id: int) -> List[dict]:
     query = Report.objects.filter(task_id=report.task_id).order_by('-version', '-created_at')
     return [
         {
+            "version_id": str(item.id),
+            "version_no": item.version,
             "id": item.id,
             "title": item.title,
             "version": item.version,

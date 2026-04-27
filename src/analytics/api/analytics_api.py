@@ -125,7 +125,7 @@ def model_usage(request: HttpRequest):
     stats = get_dashboard_stats()
     ranking = [
         {
-            "model_id": item.get("llm_config__model_id") or item.get("llm_config__name") or "",
+            "model_id": str(item.get("llm_config_id") or ""),
             "model_name": item.get("llm_config__name") or "Unknown",
             "provider": "",
             "call_count": item.get("calls", 0),
@@ -205,7 +205,11 @@ def favorite_add(request: HttpRequest):
     if not item_type or not item_id:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "缺少必要参数")
 
-    add_favorite(request.user.id, item_type, int(item_id), None if folder_id == "default" else folder_id)
+    item_id = str(item_id).strip()
+    if not item_id:
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "target_id 不能为空")
+
+    add_favorite(request.user.id, item_type, item_id, None if folder_id == "default" else folder_id)
     favorites = list_favorites(request.user.id, item_type)
     latest = next((item for item in favorites if str(item.get("item_id")) == str(item_id)), None)
     return success_api_response({

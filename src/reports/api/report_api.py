@@ -31,7 +31,14 @@ def report_detail(request: HttpRequest, report_id: int):
         versions = list_report_versions(report_id)
         if not versions:
             return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "报告不存在")
-        return success_api_response({"list": versions, "total": len(versions)})
+        current_version = next((item for item in versions if item.get("is_latest")), None)
+        return success_api_response({
+            "report_id": str(report_id),
+            "current_version_id": (
+                current_version.get("version_id") if current_version else versions[0].get("version_id")
+            ),
+            "versions": versions,
+        })
 
     report_mode = request.GET.get('report_mode', 'full')
     data = get_report_detail(report_id, report_mode)
@@ -119,11 +126,16 @@ def manual_export_report(request: HttpRequest, report_id: int):
 @response_wrapper
 @require_GET
 @jwt_auth(perms=['reports.view_report'])
-def export_status(request: HttpRequest, export_id: int):
+def export_status(request: HttpRequest, export_id: str):
     """获取导出状态
     [route]: GET /api/v1/reports/exports/{export_id}/status
     """
-    data = get_export_record(export_id)
+    try:
+        parsed_export_id = int(export_id)
+    except (TypeError, ValueError):
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "export_id 必须是数字")
+
+    data = get_export_record(parsed_export_id)
     if not data:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "导出记录不存在")
     return success_api_response(data)

@@ -7,7 +7,7 @@
 from django.contrib import admin
 from django.urls import path, include
 from eightfeet.health import healthz, readyz
-from llm_manager.api.llm_api import available_models
+from llm_manager.api.llm_api import available_models, config_collection
 from reports.api.report_api import public_shared_report
 from users.api.user_api import current_permissions
 
