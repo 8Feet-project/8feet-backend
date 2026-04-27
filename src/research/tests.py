@@ -19,14 +19,19 @@ from research.interface.cross_validation.orchestrator import _integrator_candida
 from research.interface.cross_validation.payloads import _payload_from_result
 from research.interface.cross_validation_runtime import (
     CrossModelSpec,
+    build_cross_integrator_system_message,
     build_cross_integrator_prompt,
     build_cross_model_research_prompt,
     enqueue_cross_validation_run,
 )
-from research.interface.prompt_contracts import object_type_research_requirements
+from research.interface.prompt_contracts import (
+    object_type_research_requirements,
+    report_format_requirements,
+)
 from research.interface.research_runtime import (
     _build_execution_constraints,
     build_initial_prompt,
+    build_research_system_message,
     _resolve_max_turns,
     _resolve_tool_limits,
 )
@@ -93,6 +98,35 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
         self.assertIn("对象类型专项调研框架（通用商业对象）", contract)
         self.assertIn("避免同名对象混淆", contract)
 
+    def test_report_format_contract_requires_export_ready_markdown(self):
+        contract = report_format_requirements("/mnt/user-data/outputs/research_report.md")
+
+        self.assertIn("PDF/Word 导出", contract)
+        self.assertIn("## 摘要", contract)
+        self.assertIn("## 核心发现", contract)
+        self.assertIn("## 关键证据", contract)
+        self.assertIn("## 风险与不确定性", contract)
+        self.assertIn("## 结论与建议", contract)
+        self.assertIn("/mnt/user-data/outputs/research_report.md", contract)
+        self.assertIn("present_report", contract)
+
+    def test_research_system_message_and_initial_prompt_share_report_contract(self):
+        system_message = build_research_system_message()
+        task = SimpleNamespace(
+            title="报告格式调研",
+            object_name="Acme",
+            object_type="COMPANY",
+            search_params={},
+        )
+        prompt = build_initial_prompt(task)
+
+        for text in (system_message, prompt):
+            self.assertIn("最终报告格式与交付要求", text)
+            self.assertIn("PDF/Word 导出", text)
+            self.assertIn("## 摘要", text)
+            self.assertIn("## 结论与建议", text)
+            self.assertIn("present_report", text)
+
 
 class CrossValidationRuntimeTests(SimpleTestCase):
     def test_model_id_list_accepts_json_array_and_comma_text(self):
@@ -108,7 +142,19 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertIn("对象类型专项调研框架（公司）", prompt)
         self.assertIn("企业身份与资质", prompt)
         self.assertIn("/mnt/user-data/outputs/model_research_report.md", prompt)
+        self.assertIn("最终报告格式与交付要求", prompt)
+        self.assertIn("## 摘要", prompt)
+        self.assertIn("## 结论与建议", prompt)
         self.assertIn("present_report", prompt)
+
+    def test_integrator_system_message_requires_report_contract(self):
+        system_message = build_cross_integrator_system_message()
+
+        self.assertIn("最终报告格式与交付要求", system_message)
+        self.assertIn("PDF/Word 导出", system_message)
+        self.assertIn("## 核心发现", system_message)
+        self.assertIn("/mnt/user-data/outputs/cross_validation_report.md", system_message)
+        self.assertIn("present_report", system_message)
 
     def test_integrator_prompt_points_to_copied_reports(self):
         prompt = build_cross_integrator_prompt(
@@ -140,6 +186,8 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertIn("对象类型专项核查框架", prompt)
         self.assertIn("企业身份与资质", prompt)
         self.assertIn("cross_validation_report.md", prompt)
+        self.assertIn("最终报告格式与交付要求", prompt)
+        self.assertIn("## 风险与不确定性", prompt)
         self.assertIn("智能整合优化", prompt)
 
     def test_payload_from_result_exposes_consensus_difference_and_reports(self):

@@ -32,7 +32,10 @@ from llm_manager.interface.llm_interface import (
 )
 from llm_manager.models.llm_config import LLMConfig
 from reports.models.citation import Citation
-from research.interface.prompt_contracts import object_type_research_requirements
+from research.interface.prompt_contracts import (
+    object_type_research_requirements,
+    report_format_requirements,
+)
 from reports.models.report import Report
 from research.interface.thread_codec import (
     content_to_text,
@@ -101,10 +104,12 @@ class TaskCancelledError(RuntimeError):
 
 def build_research_system_message() -> str:
     """统一的 research agent system prompt。"""
+    report_contract = report_format_requirements()
     return (
         "你是 8Feet 商业对象智能调研分析助手。"
         "你的目标是围绕公司、股票、商品三类对象开展有限、可追溯的商业调研。"
         "默认采用标准调研模式：先少量补充证据，再尽快输出中文 Markdown 结果。"
+        f"\n{report_contract}"
         "所有结论都必须以已检索到的事实为基础，避免无依据推断。"
         "当工具返回 citation key 时，请在对应结论里保留类似 [@cite_key] 的引用标记。"
         "除非用户或任务参数明确要求 deep 深度模式，否则不要启动子代理、不要执行 evidence dossier 多阶段工作流。"
@@ -198,6 +203,7 @@ def build_initial_prompt(task: ResearchTask) -> str:
         indent=2,
     )
     object_requirements = object_type_research_requirements(task.object_type)
+    report_contract = report_format_requirements("/mnt/user-data/outputs/research_report.md")
     return (
         "请围绕以下商业对象开展一次商业调研，并输出结构化 Markdown 报告。\n\n"
         f"- 调研标题: {task.title}\n"
@@ -208,8 +214,9 @@ def build_initial_prompt(task: ResearchTask) -> str:
         "  1. 先明确调研思路，再按执行约束少量调用必要工具补充证据。\n"
         "  2. 必须优先覆盖上方对象类型专项调研框架，再补充通用商业分析维度。\n"
         "  3. 优先引用高可信来源；如果结论来自带有引用键的信息源，请在结论后保留引用键。\n"
-        "  4. 最终输出包含：摘要、核心发现、关键证据、风险与不确定性、结论与建议。\n"
+        "  4. 严格遵守下方最终报告格式与交付要求。\n"
         "  5. 不要为了追求完整性无限检索；证据不足时说明不确定性并完成报告。\n\n"
+        f"{report_contract}\n"
         f"{_build_execution_constraints(task.search_params)}\n"
         f"补充检索参数:\n```json\n{search_params}\n```"
     )

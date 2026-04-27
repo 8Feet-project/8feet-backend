@@ -1,6 +1,33 @@
 """Shared prompt contracts for research agents."""
 from __future__ import annotations
 
+REPORT_SECTION_HEADINGS = (
+    "摘要",
+    "核心发现",
+    "关键证据",
+    "风险与不确定性",
+    "结论与建议",
+)
+
+
+def report_format_requirements(report_path: str | None = None) -> str:
+    """Return the required final report delivery contract."""
+    path_rule = (
+        f"- 最终报告必须写入 `{report_path}`，并调用 present_report 展示该文件。\n"
+        if report_path
+        else "- 最终报告必须写入 Markdown 文件，并调用 present_report 展示该文件。\n"
+    )
+    headings = "\n".join(f"  - ## {heading}" for heading in REPORT_SECTION_HEADINGS)
+    return (
+        "最终报告格式与交付要求:\n"
+        "- 报告必须是可直接用于下载、分享以及 PDF/Word 导出的中文 Markdown。\n"
+        "- 使用一个 `#` 一级标题作为报告标题，随后按以下 `##` 二级标题顺序输出:\n"
+        f"{headings}\n"
+        "- 正文段落要完整成句；必要时使用 Markdown 表格承载对比信息。\n"
+        "- 不要在最终报告中保留工具调用 JSON、过程日志、草稿占位符或未完成说明。\n"
+        f"{path_rule}"
+    )
+
 
 def object_type_research_requirements(object_type: str) -> str:
     """Return the mandatory research lens for each supported business object type."""
