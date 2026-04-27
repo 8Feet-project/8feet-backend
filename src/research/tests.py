@@ -11,6 +11,7 @@ from research.interface.cross_validation_runtime import (
     _integrator_candidates,
     _is_llm_failure_output,
     _payload_from_result,
+    _strip_tool_call_markup,
     build_cross_integrator_prompt,
     build_cross_model_research_prompt,
     enqueue_cross_validation_run,
@@ -144,6 +145,12 @@ class CrossValidationRuntimeTests(SimpleTestCase):
             )
         )
         self.assertFalse(_is_llm_failure_output("# 正常报告\n- 结论"))
+
+    def test_tool_call_markup_is_stripped_from_report_tail(self):
+        self.assertEqual(
+            _strip_tool_call_markup("# 报告\n正文\n<longcat_tool_call>{...}"),
+            "# 报告\n正文",
+        )
 
     def test_integrator_candidates_fall_back_to_successful_models(self):
         requested = CrossModelSpec("a", "model-a", "env", {"model": "a", "api_key": "k", "base_url": "u"})
