@@ -17,9 +17,6 @@ class LLMConfig(models.Model):
     provider = models.CharField(
         max_length=64, help_text="模型供应商，如 OpenAI、Anthropic、百度"
     )
-    model_id = models.CharField(
-        max_length=128, help_text="模型版本标识，如 gpt-4-0613"
-    )
     api_endpoint = models.CharField(
         max_length=512, null=True, blank=True,
         help_text="API 接口地址"

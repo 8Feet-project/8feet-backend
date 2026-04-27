@@ -74,7 +74,6 @@ def _create_admin_model(data: dict) -> dict:
     success, message, config_id = create_or_update_llm_config(
         name=data.get('name') or data.get('model_name'),
         provider=data.get('provider'),
-        model_id=data.get('model_name') or data.get('name'),
         api_endpoint=data.get('api_endpoint') or data.get('api_base_url'),
         api_key=data.get('api_key'),
         context_window=_to_int(data.get('context_window'), 4096),

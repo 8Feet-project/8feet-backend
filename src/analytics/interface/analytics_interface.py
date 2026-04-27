@@ -57,7 +57,7 @@ def get_dashboard_stats() -> dict:
 
     # 模型调用排行 (按 Token 消耗)
     llm_usage_ranking = list(
-        ModelUsage.objects.values('llm_config__name')
+        ModelUsage.objects.values('llm_config_id', 'llm_config__name')
         .annotate(
             tokens=Sum('total_tokens'),
             cost=Sum('cost'),

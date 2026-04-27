@@ -6,9 +6,9 @@ from llm_manager.models.model_usage import ModelUsage
 
 @admin.register(LLMConfig)
 class LLMConfigAdmin(admin.ModelAdmin):
-    list_display = ['name', 'provider', 'model_id', 'is_enabled', 'is_online', 'created_at']
+    list_display = ['name', 'provider', 'is_enabled', 'is_online', 'created_at']
     list_filter = ['provider', 'is_enabled', 'is_online']
-    search_fields = ['name', 'model_id']
+    search_fields = ['name']
 
 
 @admin.register(ModelPermission)

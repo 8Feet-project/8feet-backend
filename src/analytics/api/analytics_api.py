@@ -125,7 +125,7 @@ def model_usage(request: HttpRequest):
     stats = get_dashboard_stats()
     ranking = [
         {
-            "model_id": item.get("llm_config__model_id") or item.get("llm_config__name") or "",
+            "model_id": str(item.get("llm_config_id") or ""),
             "model_name": item.get("llm_config__name") or "Unknown",
             "provider": "",
             "call_count": item.get("calls", 0),

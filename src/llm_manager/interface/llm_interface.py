@@ -66,7 +66,6 @@ def normalize_provider_base_url(provider: str | None, base_url: str | None) -> s
 def create_or_update_llm_config(
     name: str,
     provider: str,
-    model_id: str,
     api_endpoint: str = None,
     api_key: str = None,
     context_window: int = 4096,
@@ -80,29 +79,31 @@ def create_or_update_llm_config(
 ) -> tuple[bool, Optional[str], Optional[int]]:
     """创建或更新大模型配置。
 
-    前端只提供 model_name，因此当前契约下 model_name 同时作为展示名和
-    AI 运行时传给 provider 的模型名；API 对外 model_id 使用数据库主键。
+    对外 model_id 始终表示 LLMConfig 主键。前端 model_name 写入 name，并作为
+    AI 运行时传给 provider SDK 的模型名称。
     """
-    if not name or not provider or not model_id:
+    if not name or not provider:
         return (False, "model_name, provider 均为必填项", None)
 
-    config, _ = LLMConfig.objects.update_or_create(
-        provider=provider,
-        model_id=model_id,
-        defaults={
-            'name': name,
-            'api_endpoint': api_endpoint,
-            'api_key_encrypted': api_key,
-            'context_window': int(context_window or 4096),
-            'max_output_tokens': int(max_output_tokens or 2048),
-            'input_price_1m': Decimal(str(input_price_1m or 0)),
-            'output_price_1m': Decimal(str(output_price_1m or 0)),
-            'params': params or {},
-            'description': description,
-            'is_enabled': _coerce_bool(is_enabled, True),
-            'is_online': _coerce_bool(is_online, True),
-        },
-    )
+    defaults = {
+        'api_endpoint': api_endpoint,
+        'api_key_encrypted': api_key,
+        'context_window': int(context_window or 4096),
+        'max_output_tokens': int(max_output_tokens or 2048),
+        'input_price_1m': Decimal(str(input_price_1m or 0)),
+        'output_price_1m': Decimal(str(output_price_1m or 0)),
+        'params': params or {},
+        'description': description,
+        'is_enabled': _coerce_bool(is_enabled, True),
+        'is_online': _coerce_bool(is_online, True),
+    }
+    config = LLMConfig.objects.filter(provider=provider, name=name).order_by('id').first()
+    if config:
+        for field, value in defaults.items():
+            setattr(config, field, value)
+        config.save(update_fields=[*defaults.keys(), 'updated_at'])
+    else:
+        config = LLMConfig.objects.create(provider=provider, name=name, **defaults)
     return (True, None, config.id)
 
 
@@ -123,14 +124,12 @@ def update_llm_config(config_id: int, payload: dict) -> tuple[bool, str | None, 
         if not value:
             return (False, "model_name 不能为空", [])
         config.name = value
-        config.model_id = value
         updated_fields.append("model_name")
     elif "name" in payload and payload.get("name") is not None:
         value = str(payload.get("name") or "").strip()
         if not value:
             return (False, "name 不能为空", [])
         config.name = value
-        config.model_id = value
         updated_fields.append("name")
 
     for incoming, model_field in field_map.items():
@@ -621,13 +620,14 @@ def get_provider_runtime_config(
         or resolve_env_name(params.get("base_url_env"))
     )
     base_url = normalize_provider_base_url(config.provider, base_url)
-    if not config.model_id or not api_key or not base_url:
-        return (False, "选定模型缺少 model_id / api_key / api_endpoint 配置", {})
+    model_name = str(config.name or "").strip()
+    if not model_name or not api_key or not base_url:
+        return (False, "选定模型缺少 model_name / api_key / api_endpoint 配置", {})
     return (
         True,
         None,
         {
-            "model": config.model_id,
+            "model": model_name,
             "api_key": api_key,
             "base_url": base_url,
             "debug_provider_http": bool(params.get("debug_provider_http", False)),
