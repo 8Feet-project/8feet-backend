@@ -28,6 +28,7 @@ from research.interface.prompt_contracts import (
     citation_discipline_requirements,
     object_type_research_requirements,
     report_format_requirements,
+    search_then_research_workflow,
 )
 from research.interface.research_runtime import (
     _build_execution_constraints,
@@ -46,7 +47,7 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
             {
                 "web_search": 5,
                 "web_fetch": 6,
-                "task": 0,
+                "task": 2,
                 "bash": 0,
             },
         )
@@ -68,8 +69,24 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
 
         self.assertIn("web_search 最多调用 5 次", constraints)
         self.assertIn("web_fetch 最多调用 6 次", constraints)
-        self.assertIn("禁止启动子代理", constraints)
+        self.assertIn("task 子代理最多调用 2 次", constraints)
+        self.assertIn("自行判断", constraints)
+        self.assertIn("deep-search 或 researcher", constraints)
+        self.assertIn("不要按来源数量机械停止", constraints)
+        self.assertNotIn("3 个以上可用来源", constraints)
         self.assertIn("直接基于已有证据输出阶段性最终报告", constraints)
+
+    def test_subagents_can_be_disabled_by_task_params(self):
+        constraints = _build_execution_constraints({"enable_subagents": False})
+
+        self.assertIn("task 子代理最多调用 0 次", constraints)
+        self.assertIn("当前参数未分配子代理预算", constraints)
+
+    def test_quick_research_can_explicitly_enable_subagents(self):
+        self.assertEqual(
+            _resolve_tool_limits({"research_depth": "quick", "enable_subagents": True})["task"],
+            2,
+        )
 
     def test_initial_prompt_includes_object_type_research_frameworks(self):
         cases = [
@@ -111,6 +128,15 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
         self.assertIn("/mnt/user-data/outputs/research_report.md", contract)
         self.assertIn("present_report", contract)
 
+    def test_search_then_research_workflow_guides_deepsearch_delegation(self):
+        contract = search_then_research_workflow()
+
+        self.assertIn("先 search", contract)
+        self.assertIn("再 research", contract)
+        self.assertIn("`deep-search`", contract)
+        self.assertIn("`researcher`", contract)
+        self.assertIn("不要按来源数量机械停止", contract)
+
     def test_citation_contract_requires_fact_level_cite_keys(self):
         contract = citation_discipline_requirements()
 
@@ -131,6 +157,14 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
         prompt = build_initial_prompt(task)
 
         for text in (system_message, prompt):
+            self.assertNotIn("先少量补充证据", text)
+            self.assertNotIn("再尽快输出", text)
+            self.assertNotIn("除非用户或任务参数明确要求 deep 深度模式", text)
+            self.assertNotIn("3 个以上可用来源", text)
+            self.assertIn("根据任务复杂度判断", text)
+            self.assertIn("DeepSearch 工作流建议", text)
+            self.assertIn("`deep-search`", text)
+            self.assertIn("`researcher`", text)
             self.assertIn("最终报告格式与交付要求", text)
             self.assertIn("PDF/Word 导出", text)
             self.assertIn("## 摘要", text)
