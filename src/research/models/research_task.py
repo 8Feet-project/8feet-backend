@@ -27,6 +27,14 @@ TASK_STATUS_CHOICES = [
     (STATUS_CANCELLED, '已取消'),
 ]
 
+TASK_ROLE_PRIMARY = 'PRIMARY'
+TASK_ROLE_CROSS_MODEL = 'CROSS_MODEL'
+
+TASK_ROLE_CHOICES = [
+    (TASK_ROLE_PRIMARY, '主调研任务'),
+    (TASK_ROLE_CROSS_MODEL, '交叉验证模型子任务'),
+]
+
 OBJECT_TYPE_COMPANY = 'COMPANY'
 OBJECT_TYPE_STOCK = 'STOCK'
 OBJECT_TYPE_PRODUCT = 'PRODUCT'
@@ -47,6 +55,15 @@ class ResearchTask(models.Model):
         get_user_model(), on_delete=models.CASCADE,
         related_name='research_tasks',
         help_text="发起调研的用户"
+    )
+    parent_task = models.ForeignKey(
+        'self', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='child_tasks',
+        help_text="父级调研任务；为空表示用户发起的主任务"
+    )
+    task_role = models.CharField(
+        max_length=32, choices=TASK_ROLE_CHOICES, default=TASK_ROLE_PRIMARY,
+        help_text="任务角色，用于区分主任务与内部交叉验证子任务"
     )
     title = models.CharField(
         max_length=256, help_text="调研任务标题"
@@ -87,6 +104,10 @@ class ResearchTask(models.Model):
             ('create_research', '发起调研任务'),
             ('view_research', '查看调研任务'),
             ('cancel_research', '取消调研任务'),
+        ]
+        indexes = [
+            models.Index(fields=['parent_task', 'task_role'], name='research_task_parent_role_idx'),
+            models.Index(fields=['user', 'parent_task'], name='research_task_user_parent_idx'),
         ]
 
     def __str__(self):

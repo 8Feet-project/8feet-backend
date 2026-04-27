@@ -3,7 +3,8 @@ research 模型模块
 """
 from .research_task import (
     ResearchTask, STATUS_PENDING, STATUS_SEARCHING,
-    STATUS_ANALYZING, STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED
+    STATUS_ANALYZING, STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED,
+    TASK_ROLE_CROSS_MODEL, TASK_ROLE_PRIMARY
 )
 from .scraped_content import ScrapedContent
 from .analysis_result import AnalysisResult

@@ -198,7 +198,10 @@ def task_list(request: HttpRequest):
 @require_GET
 @jwt_auth(perms=['research.view_research'])
 def research_history_list(request: HttpRequest):
-    tasks = ResearchTask.objects.filter(user_id=request.user.id).prefetch_related("reports")
+    tasks = ResearchTask.objects.filter(
+        user_id=request.user.id,
+        parent_task__isnull=True,
+    ).prefetch_related("reports")
     object_type = request.GET.get("object_type")
     if object_type:
         reverse_map = {"company": "COMPANY", "stock": "STOCK", "commodity": "PRODUCT"}

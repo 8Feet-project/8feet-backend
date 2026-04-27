@@ -224,7 +224,7 @@ def list_user_tasks(user_id: int) -> List[dict]:
     """获取用户的所有调研任务列表。"""
     tasks = (
         ResearchTask.objects
-        .filter(user_id=user_id)
+        .filter(user_id=user_id, parent_task__isnull=True)
         .select_related('conversation')
         .order_by('-created_at')
     )
