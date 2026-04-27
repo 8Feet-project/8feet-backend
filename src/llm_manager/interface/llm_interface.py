@@ -146,11 +146,17 @@ def update_llm_config(config_id: int, payload: dict) -> tuple[bool, str | None, 
         updated_fields.append("api_key")
 
     if "context_window" in payload and payload.get("context_window") is not None:
-        config.context_window = int(payload.get("context_window") or 4096)
+        context_window = _parse_positive_int(payload.get("context_window"), "context_window")
+        if isinstance(context_window, str):
+            return (False, context_window, [])
+        config.context_window = context_window
         updated_fields.append("context_window")
 
     if "max_output_tokens" in payload and payload.get("max_output_tokens") is not None:
-        config.max_output_tokens = int(payload.get("max_output_tokens") or 2048)
+        max_output_tokens = _parse_positive_int(payload.get("max_output_tokens"), "max_output_tokens")
+        if isinstance(max_output_tokens, str):
+            return (False, max_output_tokens, [])
+        config.max_output_tokens = max_output_tokens
         updated_fields.append("max_output_tokens")
 
     if "enabled" in payload or "is_enabled" in payload:
@@ -162,15 +168,24 @@ def update_llm_config(config_id: int, payload: dict) -> tuple[bool, str | None, 
         params.update(payload["params"])
         updated_fields.append("params")
     if "temperature" in payload and payload.get("temperature") is not None:
-        params["temperature"] = float(payload.get("temperature"))
+        temperature = _parse_float(payload.get("temperature"), "temperature")
+        if isinstance(temperature, str):
+            return (False, temperature, [])
+        params["temperature"] = temperature
         updated_fields.append("temperature")
     config.params = params
 
     if "input_price_1m" in payload:
-        config.input_price_1m = Decimal(str(payload.get("input_price_1m") or 0))
+        input_price = _parse_decimal(payload.get("input_price_1m"), "input_price_1m")
+        if isinstance(input_price, str):
+            return (False, input_price, [])
+        config.input_price_1m = input_price
         updated_fields.append("input_price_1m")
     if "output_price_1m" in payload:
-        config.output_price_1m = Decimal(str(payload.get("output_price_1m") or 0))
+        output_price = _parse_decimal(payload.get("output_price_1m"), "output_price_1m")
+        if isinstance(output_price, str):
+            return (False, output_price, [])
+        config.output_price_1m = output_price
         updated_fields.append("output_price_1m")
     if "description" in payload:
         config.description = payload.get("description")
@@ -181,6 +196,33 @@ def update_llm_config(config_id: int, payload: dict) -> tuple[bool, str | None, 
 
     config.save()
     return (True, None, sorted(set(updated_fields)))
+
+
+def _parse_positive_int(value: Any, field_name: str) -> int | str:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return f"{field_name} 必须是正整数"
+    if parsed <= 0:
+        return f"{field_name} 必须是正整数"
+    return parsed
+
+
+def _parse_float(value: Any, field_name: str) -> float | str:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return f"{field_name} 必须是数字"
+
+
+def _parse_decimal(value: Any, field_name: str) -> Decimal | str:
+    try:
+        parsed = Decimal(str(value or 0))
+    except Exception:
+        return f"{field_name} 必须是数字"
+    if parsed < 0:
+        return f"{field_name} 不能为负数"
+    return parsed
 
 
 def delete_llm_config(config_id: int) -> tuple[bool, str | None]:
@@ -417,9 +459,6 @@ def assign_model_permissions(
         role = GROUP_ROLE_ALIASES.get(str(group_id or "").strip())
         if role and role not in roles:
             roles.append(role)
-
-    if not users and not roles:
-        return (False, "未找到有效的授权用户或用户组", 0)
 
     with transaction.atomic():
         ModelPermission.objects.filter(llm_config=config).delete()

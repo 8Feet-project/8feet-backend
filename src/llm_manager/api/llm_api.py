@@ -247,18 +247,11 @@ get_config_detail = model_detail_resource
 @require_POST
 @jwt_auth(perms=['llm_manager.change_llmconfig'])
 def test_config_connection(request: HttpRequest, model_id: int):
-    """管理端连接测试。当前先校验配置完整性，避免前端调用缺失路由返回 HTML。"""
-    config = LLMConfig.objects.filter(pk=model_id).first()
-    if not config:
-        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "模型不存在")
-
-    ok = bool(config.api_endpoint)
-    return success_api_response({
-        "model_id": str(config.id),
-        "success": ok,
-        "latency_ms": 0,
-        "message": "连接配置完整" if ok else "API Base URL 不能为空",
-    })
+    """管理端连接测试。与创建后的自动测试共用同一套配置校验逻辑。"""
+    success, message, payload = test_llm_config_connection(model_id)
+    if not success:
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, message)
+    return success_api_response(payload)
 
 
 @response_wrapper
