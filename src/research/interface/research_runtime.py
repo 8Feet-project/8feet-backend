@@ -32,6 +32,12 @@ from llm_manager.interface.llm_interface import (
 )
 from llm_manager.models.llm_config import LLMConfig
 from reports.models.citation import Citation
+from research.interface.prompt_contracts import (
+    citation_discipline_requirements,
+    object_type_research_requirements,
+    report_format_requirements,
+    search_then_research_workflow,
+)
 from reports.models.report import Report
 from research.interface.thread_codec import (
     content_to_text,
@@ -63,24 +69,6 @@ from research.models import (
 )
 
 DEFAULT_MAX_TURNS = 10
-STANDARD_TOOL_LIMITS = {
-    "web_search": 5,
-    "web_fetch": 6,
-    "task": 0,
-    "bash": 0,
-}
-QUICK_TOOL_LIMITS = {
-    "web_search": 3,
-    "web_fetch": 4,
-    "task": 0,
-    "bash": 0,
-}
-DEEP_TOOL_LIMITS = {
-    "web_search": 12,
-    "web_fetch": 16,
-    "task": 4,
-    "bash": 2,
-}
 MAX_WORKERS = 4
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / '.env')
@@ -100,14 +88,17 @@ class TaskCancelledError(RuntimeError):
 
 def build_research_system_message() -> str:
     """统一的 research agent system prompt。"""
+    workflow_contract = search_then_research_workflow()
+    report_contract = report_format_requirements()
+    citation_contract = citation_discipline_requirements()
     return (
         "你是 8Feet 商业对象智能调研分析助手。"
-        "你的目标是围绕公司、股票、商品三类对象开展有限、可追溯的商业调研。"
-        "默认采用标准调研模式：先少量补充证据，再尽快输出中文 Markdown 结果。"
+        "你的目标是围绕公司、股票、商品三类对象开展深入、可追溯的商业调研。"
+        "由你根据任务复杂度判断调研深度、检索范围和是否需要子代理协作。"
+        f"\n{workflow_contract}"
+        f"\n{report_contract}"
+        f"{citation_contract}"
         "所有结论都必须以已检索到的事实为基础，避免无依据推断。"
-        "当工具返回 citation key 时，请在对应结论里保留类似 [@cite_key] 的引用标记。"
-        "除非用户或任务参数明确要求 deep 深度模式，否则不要启动子代理、不要执行 evidence dossier 多阶段工作流。"
-        "当已有 3 个以上可用来源，或工具调用接近预算时，必须停止继续检索并生成报告。"
         "如果来源不足或部分工具失败，不要反复换关键词重试，请在风险与不确定性中说明。"
         "最终报告文件只能由 Lead Agent 定稿，并在写入后调用 present_report。"
         "不要让子代理产出最终报告文件。"
@@ -124,68 +115,38 @@ def _normalize_research_depth(search_params: dict[str, Any] | None) -> str:
     return "standard"
 
 
-def _env_int(name: str, default: int) -> int:
-    value = os.getenv(name, "").strip()
-    if not value:
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        return default
-
-
-def _tool_limit(params: dict[str, Any], key: str, default: int) -> int:
-    value = params.get(f"max_{key}_calls", params.get(f"{key}_max_calls", default))
-    if key == "task":
-        value = params.get("max_subagent_calls", params.get("subagent_max_calls", value))
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _resolve_tool_limits(search_params: dict[str, Any] | None) -> dict[str, int]:
-    params = search_params or {}
-    depth = _normalize_research_depth(params)
-    defaults = {
-        "quick": QUICK_TOOL_LIMITS,
-        "deep": DEEP_TOOL_LIMITS,
-    }.get(depth, STANDARD_TOOL_LIMITS)
-
-    limits = {
-        key: _tool_limit(params, key, default)
-        for key, default in defaults.items()
-    }
+def _subagents_disabled(params: dict[str, Any]) -> bool:
     enable_subagents = params.get("enable_subagents")
-    if enable_subagents is False or str(enable_subagents).strip().lower() in {"0", "false", "no", "off"}:
-        limits["task"] = 0
-    return limits
+    return enable_subagents is False or str(enable_subagents).strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 def _build_execution_constraints(search_params: dict[str, Any] | None) -> str:
     params = search_params or {}
     depth = _normalize_research_depth(params)
-    limits = _resolve_tool_limits(params)
-    min_sources = _env_int("RESEARCH_MIN_SOURCES_BEFORE_REPORT", 3)
     mode_name = {
         "quick": "快速调研",
         "deep": "深度调研",
     }.get(depth, "标准调研")
     subagent_rule = (
-        "仅在确有必要时才允许启动子代理。"
-        if limits["task"] > 0
-        else "禁止启动子代理，不要调用 task 工具。"
+        "由 Lead Agent 根据任务复杂度自行判断；内容较多、来源跨度大或需要多角度验证时，可调用 deep-search 或 researcher。"
+        if not _subagents_disabled(params)
+        else "当前参数禁用了子代理，不要调用 task 工具。"
     )
     return (
-        "执行约束:\n"
+        "执行建议:\n"
         f"- 当前模式: {mode_name}。\n"
-        f"- web_search 最多调用 {limits['web_search']} 次。\n"
-        f"- web_fetch 最多调用 {limits['web_fetch']} 次。\n"
-        f"- task 子代理最多调用 {limits['task']} 次，{subagent_rule}\n"
-        f"- bash 最多调用 {limits['bash']} 次；普通网页调研不要调用 bash。\n"
-        f"- 一旦获得 {min_sources} 个以上可用来源，必须停止继续检索并生成最终 Markdown 报告。\n"
+        "- web_search 用于发现候选网址、信息面和检索方向；不要把搜索摘要当作引用证据。\n"
+        "- web_fetch 用于读取候选网页并形成可引用证据；优先抓取与专项框架和关键争议直接相关的来源。\n"
+        f"- task 子代理: {subagent_rule}\n"
+        "- bash 仅在需要处理本地文件、沙箱资料或命令行数据时使用；普通网页调研优先使用检索、抓取和结构化业务数据工具。\n"
+        "- 不要按来源数量机械停止；当证据覆盖对象专项框架、关键争议点和主要不确定性后，再收束生成最终 Markdown 报告。\n"
         "- 如果搜索失败、网页不可访问或证据不足，不要反复扩大关键词范围，请在“风险与不确定性”中说明。\n"
-        "- 工具预算接近耗尽时，禁止继续调用工具，直接基于已有证据输出阶段性最终报告。\n"
+        "- 如果运行即将结束或工具不可用，直接基于已有证据输出阶段性最终报告。\n"
     )
 
 
@@ -196,17 +157,25 @@ def build_initial_prompt(task: ResearchTask) -> str:
         ensure_ascii=False,
         indent=2,
     )
+    object_requirements = object_type_research_requirements(task.object_type)
+    workflow_contract = search_then_research_workflow()
+    report_contract = report_format_requirements("/mnt/user-data/outputs/research_report.md")
+    citation_contract = citation_discipline_requirements()
     return (
         "请围绕以下商业对象开展一次商业调研，并输出结构化 Markdown 报告。\n\n"
         f"- 调研标题: {task.title}\n"
         f"- 调研对象: {task.object_name}\n"
         f"- 对象类型: {task.object_type}\n"
+        f"\n{object_requirements}\n"
         "- 任务要求:\n"
-        "  1. 先明确调研思路，再按执行约束少量调用必要工具补充证据。\n"
-        "  2. 覆盖对象概况、近期动态、行业/市场位置、主要风险与不确定性。\n"
-        "  3. 优先引用高可信来源；如果结论来自带有引用键的信息源，请在结论后保留引用键。\n"
-        "  4. 最终输出包含：摘要、核心发现、关键证据、风险与不确定性、结论与建议。\n"
+        "  1. 先明确调研思路，再按 DeepSearch 工作流和执行约束选择必要工具或子代理补充证据。\n"
+        "  2. 必须优先覆盖上方对象类型专项调研框架，再补充通用商业分析维度。\n"
+        "  3. 严格遵守下方引用约束，不能把无引用内容写成确定事实。\n"
+        "  4. 严格遵守下方最终报告格式与交付要求。\n"
         "  5. 不要为了追求完整性无限检索；证据不足时说明不确定性并完成报告。\n\n"
+        f"{workflow_contract}\n"
+        f"{citation_contract}\n"
+        f"{report_contract}\n"
         f"{_build_execution_constraints(task.search_params)}\n"
         f"补充检索参数:\n```json\n{search_params}\n```"
     )

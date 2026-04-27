@@ -3,28 +3,51 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from research.interface.prompt_contracts import (
+    citation_discipline_requirements,
+    object_type_research_requirements,
+    report_format_requirements,
+)
 from research.interface.thread_codec import json_safe
 from research.models import ResearchTask
 
 
 def build_cross_model_research_prompt(task: ResearchTask, base_prompt: str) -> str:
+    base_text = base_prompt.strip()
+    object_contract = object_type_research_requirements(getattr(task, "object_type", ""))
+    report_contract = report_format_requirements("/mnt/user-data/outputs/model_research_report.md")
+    citation_contract = citation_discipline_requirements()
+    object_contract_block = ""
+    if "对象类型专项调研框架" not in base_text:
+        object_contract_block = (
+            "对象类型专项调研框架如下，必须优先覆盖后再补充通用商业分析维度:\n"
+            f"{object_contract}\n\n"
+        )
     return (
         "你现在是多模型交叉验证中的一个独立调研线程。"
         "请不要参考其他模型的输出，也不要等待外部人工反馈。"
         "请独立完成完整调研，写入 Markdown 报告文件，并调用 present_report 展示该报告。\n\n"
         "报告文件路径建议使用:\n"
         "/mnt/user-data/outputs/model_research_report.md\n\n"
+        f"{citation_contract}\n"
+        f"{report_contract}\n"
+        "本独立线程必须使用上方 model_research_report.md 路径；"
+        "原始任务里若出现其他报告路径，仅作为主任务默认要求，不适用于本线程。\n\n"
+        f"{object_contract_block}"
         "原始调研任务如下:\n"
-        f"{base_prompt.strip()}"
+        f"{base_text}"
     )
 
 
 def build_cross_integrator_system_message() -> str:
+    report_contract = report_format_requirements("/mnt/user-data/outputs/cross_validation_report.md")
+    citation_contract = citation_discipline_requirements(integrator=True)
     return (
         "你是 8Feet 多模型交叉验证智能整合 Lead Agent。"
         "你的任务不是重新做外部检索，而是读取多个模型独立调研线程的报告与证据，"
         "比较它们的一致结论、分歧、证据质量和遗漏点，产出一份更全面、更稳健的中文 Markdown 报告。"
-        "所有来自模型报告的事实都要保留原报告中的 citation key；不要编造新的 citation key。"
+        f"\n{citation_contract}"
+        f"\n{report_contract}"
         "最终必须把整合优化报告写入 /mnt/user-data/outputs/cross_validation_report.md，"
         "然后调用 present_report。"
     )
@@ -36,6 +59,9 @@ def build_cross_integrator_prompt(
     copy_manifests: list[dict[str, Any]],
 ) -> str:
     manifest_json = json.dumps(json_safe(copy_manifests), ensure_ascii=False, indent=2)
+    object_contract = object_type_research_requirements(str(task_payload.get("object_type") or ""))
+    report_contract = report_format_requirements("/mnt/user-data/outputs/cross_validation_report.md")
+    citation_contract = citation_discipline_requirements(integrator=True)
     results_overview = json.dumps(
         [
             {
@@ -59,6 +85,8 @@ def build_cross_integrator_prompt(
         f"- 标题: {task_payload.get('title')}\n"
         f"- 对象: {task_payload.get('object_name')}\n"
         f"- 类型: {task_payload.get('object_type')}\n\n"
+        "对象类型专项核查框架:\n"
+        f"{object_contract}\n\n"
         "每个模型线程的沙箱已经复制到当前线程 workspace 下。"
         "请优先读取 copied_path 指向的 presented report；必要时再阅读同目录下的 evidence、outputs 或 workspace 文件。\n\n"
         "复制清单:\n"
@@ -66,9 +94,12 @@ def build_cross_integrator_prompt(
         "模型输出概览:\n"
         f"```json\n{results_overview}\n```\n\n"
         "输出要求:\n"
-        "1. 提炼多模型一致支持的核心结论。\n"
-        "2. 标出模型间分歧、证据冲突或只有单一模型支持的观点。\n"
-        "3. 对证据质量和缺口做判断，必要时说明哪些结论需要人工复核。\n"
-        "4. 形成整合优化后的最终调研参考报告。\n"
-        "5. 将报告写入 /mnt/user-data/outputs/cross_validation_report.md 并调用 present_report。"
+        "1. 先按对象类型专项核查框架检查各模型报告是否覆盖关键维度。\n"
+        "2. 提炼多模型一致支持的核心结论。\n"
+        "3. 标出模型间分歧、证据冲突或只有单一模型支持的观点。\n"
+        "4. 对证据质量和缺口做判断，必要时说明哪些结论需要人工复核。\n"
+        "5. 形成整合优化后的最终调研参考报告。\n"
+        "6. 严格遵守下方引用约束与最终报告格式交付要求。\n\n"
+        f"{citation_contract}\n"
+        f"{report_contract}"
     )
