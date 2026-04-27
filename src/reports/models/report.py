@@ -21,11 +21,11 @@ class Report(models.Model):
         help_text="报告摘要"
     )
     content_markdown = models.TextField(
-        help_text="报告正文 (Markdown 格式，详版)"
+        help_text="详细报告文本 (Markdown 内容)"
     )
     content_brief = models.TextField(
         null=True, blank=True,
-        help_text="报告简版内容"
+        help_text="简版报告文本 (Markdown 内容)"
     )
     file_pdf_path = models.CharField(
         max_length=512, null=True, blank=True,

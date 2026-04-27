@@ -9,6 +9,7 @@ from research.interface import research_runtime
 from research.interface.thread_codec import json_safe
 from research.models import AnalysisResult, ResearchTask, TaskStepLog
 
+from .artifacts import _latest_report_payload
 from .run_logs import _update_cross_log, _update_cross_progress
 from .types import CrossModelSpec
 
@@ -26,6 +27,15 @@ def _persist_cross_success(
 ) -> None:
     final_output = str(integrator_result.get("final_output") or "").strip()
     citations = research_runtime._extract_citations(integrator_result.get("state_snapshot") or {})
+    presented_reports = integrator_result.get("presented_reports")
+    latest_report = _latest_report_payload(presented_reports if isinstance(presented_reports, list) else [])
+    latest_report_citations = latest_report.get("citations", []) if latest_report else []
+    report_citations = (
+        [item for item in latest_report_citations if isinstance(item, dict)]
+        if isinstance(latest_report_citations, list)
+        else []
+    )
+    brief_output = str(latest_report.get("brief_content") or "").strip() if latest_report else ""
     with transaction.atomic():
         analysis = AnalysisResult.objects.create(
             task=task,
@@ -40,10 +50,16 @@ def _persist_cross_success(
                 "used_models": [item.get("model") for item in model_results],
                 "latency_ms": latency_ms,
                 "run_metadata": json_safe(run_metadata),
+                "skip_auto_report": True,
             },
         )
         if final_output:
-            research_runtime._create_report(task, final_output, citations)
+            research_runtime._create_report(
+                task,
+                final_output,
+                report_citations or citations,
+                brief_output=brief_output,
+            )
 
         _update_cross_log(
             task,

@@ -6,12 +6,14 @@ from unittest.mock import patch
 from django.test import SimpleTestCase
 from django.utils import timezone
 
+from research.interface import research_runtime
 from research.interface.cross_validation import model_specs as cross_model_specs
 from research.interface.cross_validation import orchestrator as cross_orchestrator
 from research.interface.cross_validation import result_records as cross_result_records
 from research.interface.cross_validation import task_records as cross_task_records
 from research.interface.cross_validation.artifacts import (
     _is_llm_failure_output,
+    _report_paths_from_payloads,
     _strip_tool_call_markup,
 )
 from research.interface.cross_validation.model_specs import _coerce_model_id_list
@@ -97,15 +99,26 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
         self.assertIn("避免同名对象混淆", contract)
 
     def test_report_format_contract_requires_export_ready_markdown(self):
-        contract = report_format_requirements("/mnt/user-data/outputs/research_report.md")
+        contract = report_format_requirements(
+            "/mnt/user-data/outputs/research_report.md",
+            "/mnt/user-data/outputs/research_report_brief.md",
+        )
 
         self.assertIn("PDF/Word 导出", contract)
+        self.assertIn("详细报告", contract)
+        self.assertIn("简版报告", contract)
         self.assertIn("## 摘要", contract)
         self.assertIn("## 核心发现", contract)
         self.assertIn("## 关键证据", contract)
         self.assertIn("## 风险与不确定性", contract)
         self.assertIn("## 结论与建议", contract)
+        self.assertIn("## 核心结论", contract)
+        self.assertIn("## 关键依据", contract)
+        self.assertIn("## 风险提示", contract)
         self.assertIn("/mnt/user-data/outputs/research_report.md", contract)
+        self.assertIn("/mnt/user-data/outputs/research_report_brief.md", contract)
+        self.assertIn("full_report_path", contract)
+        self.assertIn("brief_report_path", contract)
         self.assertIn("present_report", contract)
 
     def test_search_then_research_workflow_guides_deepsearch_delegation(self):
@@ -151,8 +164,11 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
             self.assertIn("`researcher`", text)
             self.assertIn("最终报告格式与交付要求", text)
             self.assertIn("PDF/Word 导出", text)
+            self.assertIn("详细报告", text)
+            self.assertIn("简版报告", text)
             self.assertIn("## 摘要", text)
             self.assertIn("## 结论与建议", text)
+            self.assertIn("brief_report_path", text)
             self.assertIn("present_report", text)
 
     def test_research_system_message_and_initial_prompt_share_citation_contract(self):
@@ -186,11 +202,14 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertIn("对象类型专项调研框架（公司）", prompt)
         self.assertIn("企业身份与资质", prompt)
         self.assertIn("/mnt/user-data/outputs/model_research_report.md", prompt)
+        self.assertIn("/mnt/user-data/outputs/model_research_report_brief.md", prompt)
         self.assertIn("最终报告格式与交付要求", prompt)
         self.assertIn("## 摘要", prompt)
+        self.assertIn("## 核心结论", prompt)
         self.assertIn("## 结论与建议", prompt)
         self.assertIn("引用约束（句句有引用）", prompt)
         self.assertIn("web_search 只用于发现候选网址", prompt)
+        self.assertIn("brief_report_path", prompt)
         self.assertIn("present_report", prompt)
 
     def test_integrator_system_message_requires_report_contract(self):
@@ -203,6 +222,8 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertIn("PDF/Word 导出", system_message)
         self.assertIn("## 核心发现", system_message)
         self.assertIn("/mnt/user-data/outputs/cross_validation_report.md", system_message)
+        self.assertIn("/mnt/user-data/outputs/cross_validation_report_brief.md", system_message)
+        self.assertIn("brief_report_path", system_message)
         self.assertIn("present_report", system_message)
 
     def test_integrator_prompt_points_to_copied_reports(self):
@@ -235,11 +256,33 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertIn("对象类型专项核查框架", prompt)
         self.assertIn("企业身份与资质", prompt)
         self.assertIn("cross_validation_report.md", prompt)
+        self.assertIn("cross_validation_report_brief.md", prompt)
         self.assertIn("最终报告格式与交付要求", prompt)
         self.assertIn("## 风险与不确定性", prompt)
+        self.assertIn("## 风险提示", prompt)
         self.assertIn("引用约束（句句有引用）", prompt)
         self.assertIn("不能写成已证实事实", prompt)
         self.assertIn("智能整合优化", prompt)
+
+    def test_presented_report_event_persists_full_and_brief_variants(self):
+        task = SimpleNamespace(id=1)
+        event = {
+            "type": "report_presented",
+            "path": "/mnt/user-data/outputs/report.md",
+            "full_path": "/mnt/user-data/outputs/report.md",
+            "brief_path": "/mnt/user-data/outputs/report_brief.md",
+            "content": "# 报告\n\n详细内容。",
+            "brief_content": "# 报告\n\n简要内容。",
+            "citations": [{"url": "https://example.com", "title": "Example"}],
+        }
+
+        with patch.object(research_runtime, "_create_report", return_value=SimpleNamespace(id=9)) as create_report:
+            result = research_runtime._persist_presented_report_event(task, event)
+
+        self.assertEqual(result.id, 9)
+        self.assertIs(create_report.call_args.args[0], task)
+        self.assertEqual(create_report.call_args.args[1], "# 报告\n\n详细内容。")
+        self.assertEqual(create_report.call_args.kwargs["brief_output"], "# 报告\n\n简要内容。")
 
     def test_payload_from_result_exposes_consensus_difference_and_reports(self):
         now = timezone.now()
@@ -263,7 +306,16 @@ class CrossValidationRuntimeTests(SimpleTestCase):
                 "used_models": [{"model_name": "m1"}],
                 "integrator": {
                     "final_output": "# 多模型共识\n- 共同结论\n\n# 主要分歧\n- 分歧点",
-                    "report_paths": ["/mnt/user-data/outputs/cross_validation_report.md"],
+                    "report_paths": [
+                        "/mnt/user-data/outputs/cross_validation_report.md",
+                        "/mnt/user-data/outputs/cross_validation_report_brief.md",
+                    ],
+                    "presented_reports": [
+                        {
+                            "full_path": "/mnt/user-data/outputs/cross_validation_report.md",
+                            "brief_path": "/mnt/user-data/outputs/cross_validation_report_brief.md",
+                        }
+                    ],
                 },
             },
         )
@@ -277,6 +329,22 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertEqual(payload["report_path"], "/mnt/user-data/outputs/cross_validation_report.md")
         self.assertEqual(payload["used_models"], ["m1"])
         self.assertEqual(payload["model_outputs"][0]["model_id"], "m1")
+
+    def test_report_paths_from_payloads_returns_full_then_brief_paths(self):
+        paths = _report_paths_from_payloads(
+            [
+                {
+                    "path": "/mnt/user-data/outputs/report.md",
+                    "full_path": "/mnt/user-data/outputs/report.md",
+                    "brief_path": "/mnt/user-data/outputs/report_brief.md",
+                }
+            ]
+        )
+
+        self.assertEqual(
+            paths,
+            ["/mnt/user-data/outputs/report.md", "/mnt/user-data/outputs/report_brief.md"],
+        )
 
     def test_provider_failure_text_is_not_treated_as_report(self):
         self.assertTrue(

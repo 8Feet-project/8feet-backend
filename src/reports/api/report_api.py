@@ -308,7 +308,11 @@ def _serialize_report_detail(report: dict):
         "report_id": str(report.get("id") or report.get("report_id") or ""),
         "task_id": str(report.get("task_id") or ""),
         "title": report.get("title") or "",
+        "summary": report.get("summary") or "",
         "content": report.get("content") or report.get("content_markdown") or "",
+        "content_markdown": report.get("content_markdown") or "",
+        "content_brief": report.get("content_brief") or "",
+        "report_mode": report.get("report_mode") or "full",
         "citations": [
             {
                 "citation_id": str(item.get("id") or item.get("index_number") or ""),

@@ -105,7 +105,9 @@ def _public_model_output(item: dict[str, Any]) -> dict[str, Any]:
         "report_paths": item.get("report_paths", []),
         "presented_reports": [
             {
-                "path": report.get("path"),
+                "path": report.get("path") or report.get("full_path"),
+                "full_path": report.get("full_path") or report.get("path"),
+                "brief_path": report.get("brief_path") or "",
                 "citation_keys": report.get("citation_keys", []),
                 "generated_reference_count": report.get("generated_reference_count", 0),
             }
@@ -174,7 +176,15 @@ def _consensus_score(model_outputs: list[dict[str, Any]]) -> int:
 
 
 def _last_report_path(integrator: dict[str, Any]) -> str:
+    reports = integrator.get("presented_reports")
+    if isinstance(reports, list):
+        for report in reversed(reports):
+            if not isinstance(report, dict):
+                continue
+            path = str(report.get("full_path") or report.get("path") or "").strip()
+            if path:
+                return path
     paths = integrator.get("report_paths")
     if isinstance(paths, list) and paths:
-        return str(paths[-1] or "")
+        return str(paths[0] or "")
     return ""
