@@ -21,7 +21,11 @@ from research.interface.research_interface import (
     list_user_tasks,
     respond_to_step,
 )
-from research.models import AnalysisResult, ResearchTask, ScrapedContent, TaskStepLog
+from research.interface.cross_validation_runtime import (
+    enqueue_cross_validation_run,
+    get_cross_validation_payload,
+)
+from research.models import ResearchTask, ScrapedContent, TaskStepLog
 
 
 def _frontend_status(status: str) -> str:
@@ -354,21 +358,27 @@ def cross_validation(request: HttpRequest, task_id: int):
     task = _get_user_task(task_id, request.user.id)
     if not task:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
-    latest = AnalysisResult.objects.filter(task_id=task.id, analysis_type="CROSS").order_by("-created_at").first()
-    payload = {
-        "task_id": str(task.id),
-        "status": "completed" if latest else "queued",
-        "consensus_points": [],
-        "difference_points": [],
-        "model_outputs": [],
-        "used_models": [],
-        "consensus_summary": latest.conclusion if latest else "",
-        "consensus_score": 0,
-        "updated_at": latest.created_at.isoformat() if latest else task.updated_at.isoformat(),
-    }
     if request.method == "POST":
-        return success_api_response({"task_id": str(task.id), "status": "queued", "result_id": str(latest.id) if latest else None})
-    return success_api_response(payload)
+        data = _request_data(request)
+        success, message, run_id = enqueue_cross_validation_run(
+            task.id,
+            requested_model_ids=(
+                data.get("multi_model_ids")
+                or data.get("model_ids")
+                or data.get("models")
+            ),
+            integrator_model_id=data.get("integrator_model_id") or data.get("integrator_model"),
+            prompt=data.get("prompt"),
+            run_metadata={"source": "api"},
+        )
+        if not success:
+            return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message or "启动多模型交叉验证失败")
+        return success_api_response({
+            "task_id": str(task.id),
+            "status": "queued",
+            "run_id": run_id,
+        })
+    return success_api_response(get_cross_validation_payload(task))
 
 
 @response_wrapper
