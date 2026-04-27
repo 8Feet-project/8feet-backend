@@ -8,6 +8,8 @@ from research.interface import cross_validation_runtime
 from research.interface.cross_validation_runtime import (
     CrossModelSpec,
     _coerce_model_id_list,
+    _integrator_candidates,
+    _is_llm_failure_output,
     _payload_from_result,
     build_cross_integrator_prompt,
     build_cross_model_research_prompt,
@@ -134,6 +136,26 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertEqual(payload["report_path"], "/mnt/user-data/outputs/cross_validation_report.md")
         self.assertEqual(payload["used_models"], ["m1"])
         self.assertEqual(payload["model_outputs"][0]["model_id"], "m1")
+
+    def test_provider_failure_text_is_not_treated_as_report(self):
+        self.assertTrue(
+            _is_llm_failure_output(
+                "The configured LLM provider is temporarily unavailable after multiple retries."
+            )
+        )
+        self.assertFalse(_is_llm_failure_output("# 正常报告\n- 结论"))
+
+    def test_integrator_candidates_fall_back_to_successful_models(self):
+        requested = CrossModelSpec("a", "model-a", "env", {"model": "a", "api_key": "k", "base_url": "u"})
+        fallback = CrossModelSpec("b", "model-b", "env", {"model": "b", "api_key": "k", "base_url": "u"})
+
+        candidates = _integrator_candidates(
+            requested,
+            [requested, fallback],
+            [{"model": {"model_name": "model-b"}}],
+        )
+
+        self.assertEqual([item.model_name for item in candidates], ["model-a", "model-b"])
 
 
 class CrossValidationEnqueueTests(SimpleTestCase):
