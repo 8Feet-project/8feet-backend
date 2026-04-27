@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 import json
 import os
+from pathlib import PurePosixPath
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
@@ -347,6 +348,7 @@ def _run_single_model_thread(
             serialized_history=serialized_history,
             create_report=True,
         )
+        final_output = _strip_tool_call_markup(final_output)
         if _is_llm_failure_output(final_output):
             raise RuntimeError(final_output)
         presented_reports = _ensure_report_payloads(
@@ -356,6 +358,8 @@ def _run_single_model_thread(
             final_output=final_output,
             fallback_filename="model_research_report.md",
         )
+        if not _report_paths_from_payloads(presented_reports):
+            raise RuntimeError("模型调研线程未产出报告文件")
         latency_ms = round((perf_counter() - started_at) * 1000, 2)
         _record_cross_step(
             task_id,
@@ -365,7 +369,7 @@ def _run_single_model_thread(
             {
                 "thread_id": thread_id,
                 "model": spec.public_payload(),
-                "report_paths": [item.get("path") for item in presented_reports if item.get("path")],
+                "report_paths": _report_paths_from_payloads(presented_reports),
                 "latency_ms": latency_ms,
             },
         )
@@ -378,7 +382,7 @@ def _run_single_model_thread(
             "summary": research_runtime._extract_summary(final_output),
             "state_snapshot": state_snapshot,
             "presented_reports": presented_reports,
-            "report_paths": [item.get("path") for item in presented_reports if item.get("path")],
+            "report_paths": _report_paths_from_payloads(presented_reports),
             "latency_ms": latency_ms,
         }
     except Exception as exc:
@@ -473,6 +477,7 @@ def _run_integrator_thread(
         serialized_history=serialized_history,
         create_report=True,
     )
+    final_output = _strip_tool_call_markup(final_output)
     if _is_llm_failure_output(final_output):
         raise RuntimeError(final_output)
     presented_reports = _ensure_report_payloads(
@@ -482,6 +487,8 @@ def _run_integrator_thread(
         final_output=final_output,
         fallback_filename="cross_validation_report.md",
     )
+    if not _report_paths_from_payloads(presented_reports):
+        raise RuntimeError("智能整合线程未产出报告文件")
     latency_ms = round((perf_counter() - started_at) * 1000, 2)
     _record_cross_step(
         task_id,
@@ -491,7 +498,7 @@ def _run_integrator_thread(
         {
             "thread_id": thread_id,
             "model": spec.public_payload(),
-            "report_paths": [item.get("path") for item in presented_reports if item.get("path")],
+            "report_paths": _report_paths_from_payloads(presented_reports),
             "latency_ms": latency_ms,
         },
     )
@@ -504,7 +511,7 @@ def _run_integrator_thread(
         "summary": research_runtime._extract_summary(final_output),
         "state_snapshot": state_snapshot,
         "presented_reports": presented_reports,
-        "report_paths": [item.get("path") for item in presented_reports if item.get("path")],
+        "report_paths": _report_paths_from_payloads(presented_reports),
         "latency_ms": latency_ms,
     }
 
@@ -720,7 +727,11 @@ def _ensure_report_payloads(
 ) -> list[dict[str, Any]]:
     reports = [report.to_payload() for report in extract_presented_reports(state_snapshot)]
     if reports:
-        return reports
+        return _sanitize_report_payloads(
+            sandbox_paths=sandbox_paths,
+            thread_id=thread_id,
+            reports=reports,
+        )
 
     text = str(final_output or "").strip()
     if not text or text == research_runtime.STOPPED_MESSAGE or _is_llm_failure_output(text):
@@ -740,6 +751,71 @@ def _ensure_report_payloads(
             "fallback_generated": True,
         }
     ]
+
+
+def _sanitize_report_payloads(
+    *,
+    sandbox_paths: SandboxPaths,
+    thread_id: str,
+    reports: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for report in reports:
+        payload = dict(report)
+        original = str(payload.get("content") or "")
+        cleaned = _strip_tool_call_markup(original)
+        if cleaned != original:
+            payload["content"] = cleaned
+            _rewrite_output_report(
+                sandbox_paths=sandbox_paths,
+                thread_id=thread_id,
+                virtual_path=str(payload.get("path") or ""),
+                content=cleaned,
+            )
+        sanitized.append(payload)
+    return sanitized
+
+
+def _report_paths_from_payloads(reports: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(item.get("path") or "").strip()
+        for item in reports
+        if str(item.get("path") or "").strip()
+    ]
+
+
+def _rewrite_output_report(
+    *,
+    sandbox_paths: SandboxPaths,
+    thread_id: str,
+    virtual_path: str,
+    content: str,
+) -> None:
+    normalized = PurePosixPath(str(virtual_path or "").strip()).as_posix()
+    if not normalized.startswith(f"{OUTPUTS_VIRTUAL_PATH}/"):
+        return
+    relative = PurePosixPath(normalized[len(OUTPUTS_VIRTUAL_PATH) :].lstrip("/"))
+    if any(part == ".." for part in relative.parts):
+        return
+    target = sandbox_paths.outputs_dir(thread_id).joinpath(*relative.parts)
+    try:
+        target.write_text(content, encoding="utf-8")
+    except OSError:
+        return
+
+
+def _strip_tool_call_markup(text: str) -> str:
+    cleaned = str(text or "")
+    markers = (
+        "<longcat_tool_call>",
+        "<tool_call>",
+        "<function_call>",
+        "<tool_calls>",
+    )
+    positions = [cleaned.find(marker) for marker in markers if marker in cleaned]
+    if not positions:
+        return cleaned.strip()
+    return cleaned[: min(positions)].rstrip()
 
 
 def _is_llm_failure_output(text: str) -> bool:
