@@ -25,6 +25,7 @@ from research.interface.cross_validation_runtime import (
     enqueue_cross_validation_run,
 )
 from research.interface.prompt_contracts import (
+    citation_discipline_requirements,
     object_type_research_requirements,
     report_format_requirements,
 )
@@ -110,6 +111,15 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
         self.assertIn("/mnt/user-data/outputs/research_report.md", contract)
         self.assertIn("present_report", contract)
 
+    def test_citation_contract_requires_fact_level_cite_keys(self):
+        contract = citation_discipline_requirements()
+
+        self.assertIn("引用约束（句句有引用）", contract)
+        self.assertIn("事实性断言", contract)
+        self.assertIn("必须在同一句或同一表格单元格内带 [@cite_key]", contract)
+        self.assertIn("web_search 只用于发现候选网址", contract)
+        self.assertIn("不要编造 citation key", contract)
+
     def test_research_system_message_and_initial_prompt_share_report_contract(self):
         system_message = build_research_system_message()
         task = SimpleNamespace(
@@ -126,6 +136,22 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
             self.assertIn("## 摘要", text)
             self.assertIn("## 结论与建议", text)
             self.assertIn("present_report", text)
+
+    def test_research_system_message_and_initial_prompt_share_citation_contract(self):
+        system_message = build_research_system_message()
+        task = SimpleNamespace(
+            title="引用约束调研",
+            object_name="Acme",
+            object_type="COMPANY",
+            search_params={},
+        )
+        prompt = build_initial_prompt(task)
+
+        for text in (system_message, prompt):
+            self.assertIn("引用约束（句句有引用）", text)
+            self.assertIn("事实性断言", text)
+            self.assertIn("[@cite_key]", text)
+            self.assertIn("不要编造 citation key", text)
 
 
 class CrossValidationRuntimeTests(SimpleTestCase):
@@ -145,12 +171,17 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertIn("最终报告格式与交付要求", prompt)
         self.assertIn("## 摘要", prompt)
         self.assertIn("## 结论与建议", prompt)
+        self.assertIn("引用约束（句句有引用）", prompt)
+        self.assertIn("web_search 只用于发现候选网址", prompt)
         self.assertIn("present_report", prompt)
 
     def test_integrator_system_message_requires_report_contract(self):
         system_message = build_cross_integrator_system_message()
 
         self.assertIn("最终报告格式与交付要求", system_message)
+        self.assertIn("引用约束（句句有引用）", system_message)
+        self.assertIn("保留原始 [@cite_key]", system_message)
+        self.assertIn("不要改写、合并或编造 citation key", system_message)
         self.assertIn("PDF/Word 导出", system_message)
         self.assertIn("## 核心发现", system_message)
         self.assertIn("/mnt/user-data/outputs/cross_validation_report.md", system_message)
@@ -188,6 +219,8 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertIn("cross_validation_report.md", prompt)
         self.assertIn("最终报告格式与交付要求", prompt)
         self.assertIn("## 风险与不确定性", prompt)
+        self.assertIn("引用约束（句句有引用）", prompt)
+        self.assertIn("不能写成已证实事实", prompt)
         self.assertIn("智能整合优化", prompt)
 
     def test_payload_from_result_exposes_consensus_difference_and_reports(self):

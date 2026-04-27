@@ -29,6 +29,32 @@ def report_format_requirements(report_path: str | None = None) -> str:
     )
 
 
+def citation_discipline_requirements(*, integrator: bool = False) -> str:
+    """Return the citation discipline contract for final reports."""
+    if integrator:
+        source_rule = (
+            "- 引用必须来自已读取的模型报告、evidence 文件或其中保留的原始 citation key；"
+            "整合时保留原始 [@cite_key]，不要改写、合并或编造 citation key。\n"
+            "- 如果某个模型报告缺少 citation key，只能把其中内容作为模型观点或待核验线索，"
+            "不能写成已证实事实。\n"
+        )
+    else:
+        source_rule = (
+            "- 只有 web_fetch 或结构化业务数据工具返回的 citation key 才能支撑事实结论；"
+            "web_search 只用于发现候选网址，不能把搜索摘要当作引用来源。\n"
+        )
+    return (
+        "引用约束（句句有引用）:\n"
+        "- 最终报告中的事实性断言、数字、时间、价格、财务指标、排名、对象状态、"
+        "市场判断、竞争判断和风险判断，必须在同一句或同一表格单元格内带 [@cite_key]。\n"
+        "- 一个句子包含多个独立事实时，引用键必须能够覆盖句内全部事实；"
+        "无法被 citation key 支撑的确定性表达必须删除或改写为推断/待核验。\n"
+        f"{source_rule}"
+        "- 没有 citation key 的内容只能写入“风险与不确定性”，并明确标注为推断、假设或待核验。\n"
+        "- 不要编造 citation key，不要引用未读取、未抓取或未出现在工具返回结果中的来源。\n"
+    )
+
+
 def object_type_research_requirements(object_type: str) -> str:
     """Return the mandatory research lens for each supported business object type."""
     normalized = str(object_type or "").strip().upper()
