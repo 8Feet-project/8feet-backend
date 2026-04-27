@@ -3,7 +3,6 @@
 """
 import json
 
-from django.contrib.auth import get_user_model
 from django.http import HttpRequest
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
@@ -15,10 +14,9 @@ from shared.utils import (
     success_api_response,
 )
 from llm_manager.interface.llm_interface import (
-    assign_model_permissions,
+    assign_model_permissions as assign_model_permissions_service,
     build_routing_recommendation,
     create_or_update_llm_config,
-    delete_llm_config,
     list_available_models,
     list_llm_configs,
     serialize_model_available,
@@ -28,8 +26,6 @@ from llm_manager.interface.llm_interface import (
     update_llm_config,
 )
 from llm_manager.models.llm_config import LLMConfig
-from llm_manager.models.model_permission import ModelPermission
-from llm_manager.models.model_usage import ModelUsage
 
 
 def _request_data(request: HttpRequest) -> dict:
@@ -211,7 +207,7 @@ def toggle_config(request: HttpRequest, model_id: int):
 
 
 @response_wrapper
-@jwt_auth(perms=['llm_manager.view_llmconfig'])
+@jwt_auth()
 def model_detail_resource(request: HttpRequest, model_id: int):
     """获取、更新或删除特定模型配置。"""
     config = LLMConfig.objects.filter(pk=model_id).first()
@@ -219,50 +215,25 @@ def model_detail_resource(request: HttpRequest, model_id: int):
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "模型不存在")
 
     if request.method == 'GET':
+        if not request.user.has_perm('llm_manager.view_llmconfig'):
+            return failed_api_response(ErrorCode.REFUSE_ACCESS, "您无权进行此操作")
         return success_api_response(serialize_model_detail(config))
 
     if request.method == 'PATCH':
+        if not request.user.has_perm('llm_manager.change_llmconfig'):
+            return failed_api_response(ErrorCode.REFUSE_ACCESS, "您无权进行此操作")
         data = _request_data(request)
-        params = data.get('params', config.params or {})
-        if isinstance(params, str):
-            try:
-                params = json.loads(params or "{}")
-            except (json.JSONDecodeError, TypeError):
-                params = config.params or {}
-
-        config.name = data.get('name') or data.get('model_name') or config.name
-        config.provider = data.get('provider') or config.provider
-        config.model_id = data.get('provider_model_id') or data.get('model_id') or config.model_id
-        config.api_endpoint = data.get('api_endpoint') or data.get('api_base_url') or config.api_endpoint
-        if data.get('api_key') not in (None, ""):
-            config.api_key_encrypted = data.get('api_key')
-        if data.get('context_window') is not None:
-            config.context_window = _to_int(data.get('context_window'), config.context_window)
-        if data.get('max_output_tokens') is not None:
-            config.max_output_tokens = _to_int(data.get('max_output_tokens'), config.max_output_tokens)
-        if data.get('input_price_1m') is not None:
-            config.input_price_1m = _to_float(data.get('input_price_1m'), config.input_price_1m)
-        if data.get('output_price_1m') is not None:
-            config.output_price_1m = _to_float(data.get('output_price_1m'), config.output_price_1m)
-        if data.get('description') is not None:
-            config.description = data.get('description')
-        if data.get('enabled') is not None or data.get('is_enabled') is not None:
-            config.is_enabled = _to_bool(data.get('is_enabled', data.get('enabled')), config.is_enabled)
-        if data.get('is_online') is not None:
-            config.is_online = _to_bool(data.get('is_online'), config.is_online)
-        if isinstance(params, dict):
-            config.params = params
-        config.save()
+        success, message, updated_fields = update_llm_config(model_id, data)
+        if not success:
+            return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
         return success_api_response({
-            "model_id": str(config.id),
-            "updated_fields": [
-                "model_name", "provider", "api_base_url", "context_window",
-                "max_output_tokens", "input_price_1m", "output_price_1m",
-                "description", "enabled",
-            ],
+            "model_id": str(model_id),
+            "updated_fields": updated_fields,
         })
 
     if request.method == 'DELETE':
+        if not request.user.has_perm('llm_manager.change_llmconfig'):
+            return failed_api_response(ErrorCode.REFUSE_ACCESS, "您无权进行此操作")
         config.delete()
         return success_api_response({"result": "success"})
 
@@ -295,43 +266,14 @@ def test_config_connection(request: HttpRequest, model_id: int):
 @jwt_auth(perms=['llm_manager.change_modelpermission'])
 def assign_model_permissions(request: HttpRequest, model_id: int):
     """为指定用户授予模型使用权限。group_ids 按角色名兼容处理。"""
-    config = LLMConfig.objects.filter(pk=model_id).first()
-    if not config:
-        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "模型不存在")
-
     data = _request_data(request)
-    user_ids = data.get("user_ids") or []
-    group_ids = data.get("group_ids") or []
-    granted = 0
+    success, message, granted = assign_model_permissions_service(
+        model_id,
+        user_ids=data.get("user_ids") or [],
+        group_ids=data.get("group_ids") or [],
+    )
+    if not success:
+        error_code = ErrorCode.ITEM_NOT_FOUND if message == "模型不存在" else ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR
+        return failed_api_response(error_code, message)
 
-    User = get_user_model()
-    for user in User.objects.filter(id__in=user_ids):
-        ModelPermission.objects.update_or_create(
-            llm_config=config,
-            user=user,
-            defaults={
-                "is_active": True,
-                "daily_quota": 100,
-                "priority_weight": 10,
-                "custom_params_override": {},
-            },
-        )
-        granted += 1
-
-    for role in group_ids:
-        role_name = str(role).replace("group-", "").strip()
-        if not role_name:
-            continue
-        ModelPermission.objects.update_or_create(
-            llm_config=config,
-            role=role_name,
-            defaults={
-                "is_active": True,
-                "daily_quota": 100,
-                "priority_weight": 5,
-                "custom_params_override": {},
-            },
-        )
-        granted += 1
-
-    return success_api_response({"model_id": str(config.id), "granted_count": granted})
+    return success_api_response({"model_id": str(model_id), "granted_count": granted})
