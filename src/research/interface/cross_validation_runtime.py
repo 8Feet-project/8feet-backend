@@ -272,14 +272,15 @@ def _run_cross_validation(
         if not successful_results:
             raise RuntimeError("所有模型调研线程均失败，无法进行智能整合")
 
-        integrator_result = _run_integrator_thread(
-            task.id,
-            run_id,
-            task_payload,
-            integrator_spec,
-            successful_results,
-            model_results,
-            sandbox_paths,
+        integrator_result, effective_integrator_spec = _run_integrator_with_fallbacks(
+            task_id=task.id,
+            run_id=run_id,
+            task_payload=task_payload,
+            requested_integrator_spec=integrator_spec,
+            model_specs=specs,
+            successful_results=successful_results,
+            model_results=model_results,
+            sandbox_paths=sandbox_paths,
         )
         latency_ms = round((perf_counter() - started_at) * 1000, 2)
         _persist_cross_success(
@@ -288,7 +289,7 @@ def _run_cross_validation(
             prompt=prompt,
             model_results=model_results,
             integrator_result=integrator_result,
-            integrator_spec=integrator_spec,
+            integrator_spec=effective_integrator_spec,
             latency_ms=latency_ms,
             run_metadata=run_metadata,
         )
@@ -346,6 +347,8 @@ def _run_single_model_thread(
             serialized_history=serialized_history,
             create_report=True,
         )
+        if _is_llm_failure_output(final_output):
+            raise RuntimeError(final_output)
         presented_reports = _ensure_report_payloads(
             sandbox_paths=sandbox_paths,
             thread_id=thread_id,
@@ -470,6 +473,8 @@ def _run_integrator_thread(
         serialized_history=serialized_history,
         create_report=True,
     )
+    if _is_llm_failure_output(final_output):
+        raise RuntimeError(final_output)
     presented_reports = _ensure_report_payloads(
         sandbox_paths=sandbox_paths,
         thread_id=thread_id,
@@ -502,6 +507,72 @@ def _run_integrator_thread(
         "report_paths": [item.get("path") for item in presented_reports if item.get("path")],
         "latency_ms": latency_ms,
     }
+
+
+def _run_integrator_with_fallbacks(
+    *,
+    task_id: int,
+    run_id: str,
+    task_payload: dict[str, Any],
+    requested_integrator_spec: CrossModelSpec,
+    model_specs: list[CrossModelSpec],
+    successful_results: list[dict[str, Any]],
+    model_results: list[dict[str, Any]],
+    sandbox_paths: SandboxPaths,
+) -> tuple[dict[str, Any], CrossModelSpec]:
+    candidates = _integrator_candidates(requested_integrator_spec, model_specs, successful_results)
+    errors: list[str] = []
+    for candidate in candidates:
+        try:
+            return (
+                _run_integrator_thread(
+                    task_id,
+                    run_id,
+                    task_payload,
+                    candidate,
+                    successful_results,
+                    model_results,
+                    sandbox_paths,
+                ),
+                candidate,
+            )
+        except Exception as exc:
+            error = str(exc)
+            errors.append(f"{candidate.model_name}: {error}")
+            _record_cross_step(
+                task_id,
+                run_id,
+                f"[cross:integrator] 智能整合失败: {candidate.model_name}",
+                "FAILED",
+                {
+                    "model": candidate.public_payload(),
+                    "error": error,
+                },
+            )
+    raise RuntimeError("智能整合线程全部失败: " + " | ".join(errors))
+
+
+def _integrator_candidates(
+    requested_integrator_spec: CrossModelSpec,
+    model_specs: list[CrossModelSpec],
+    successful_results: list[dict[str, Any]],
+) -> list[CrossModelSpec]:
+    candidates = [requested_integrator_spec]
+    successful_names = {
+        str(item.get("model", {}).get("model_name") or "").strip()
+        for item in successful_results
+        if isinstance(item.get("model"), dict)
+    }
+    for spec in model_specs:
+        if spec.model_name not in successful_names:
+            continue
+        if any(
+            existing.provider == spec.provider and existing.model_name == spec.model_name
+            for existing in candidates
+        ):
+            continue
+        candidates.append(spec)
+    return candidates
 
 
 def build_cross_model_research_prompt(task: ResearchTask, base_prompt: str) -> str:
@@ -652,7 +723,7 @@ def _ensure_report_payloads(
         return reports
 
     text = str(final_output or "").strip()
-    if not text or text == research_runtime.STOPPED_MESSAGE:
+    if not text or text == research_runtime.STOPPED_MESSAGE or _is_llm_failure_output(text):
         return []
 
     output_dir = sandbox_paths.outputs_dir(thread_id)
@@ -669,6 +740,18 @@ def _ensure_report_payloads(
             "fallback_generated": True,
         }
     ]
+
+
+def _is_llm_failure_output(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+    failure_markers = (
+        "the configured llm provider is temporarily unavailable",
+        "the configured llm provider rejected the request",
+        "llm request failed:",
+    )
+    return any(marker in normalized for marker in failure_markers)
 
 
 def _coerce_model_id_list(value: Any) -> list[str]:
