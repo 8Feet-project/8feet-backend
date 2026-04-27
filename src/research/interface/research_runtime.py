@@ -69,21 +69,6 @@ from research.models import (
 )
 
 DEFAULT_MAX_TURNS = 10
-STANDARD_TOOL_LIMITS = {
-    "web_search": 5,
-    "web_fetch": 6,
-    "bash": 0,
-}
-QUICK_TOOL_LIMITS = {
-    "web_search": 3,
-    "web_fetch": 4,
-    "bash": 0,
-}
-DEEP_TOOL_LIMITS = {
-    "web_search": 12,
-    "web_fetch": 16,
-    "bash": 2,
-}
 MAX_WORKERS = 4
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / '.env')
@@ -130,14 +115,6 @@ def _normalize_research_depth(search_params: dict[str, Any] | None) -> str:
     return "standard"
 
 
-def _tool_limit(params: dict[str, Any], key: str, default: int) -> int:
-    value = params.get(f"max_{key}_calls", params.get(f"{key}_max_calls", default))
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return default
-
-
 def _subagents_disabled(params: dict[str, Any]) -> bool:
     enable_subagents = params.get("enable_subagents")
     return enable_subagents is False or str(enable_subagents).strip().lower() in {
@@ -148,25 +125,9 @@ def _subagents_disabled(params: dict[str, Any]) -> bool:
     }
 
 
-def _resolve_tool_limits(search_params: dict[str, Any] | None) -> dict[str, int]:
-    params = search_params or {}
-    depth = _normalize_research_depth(params)
-    defaults = {
-        "quick": QUICK_TOOL_LIMITS,
-        "deep": DEEP_TOOL_LIMITS,
-    }.get(depth, STANDARD_TOOL_LIMITS)
-
-    limits = {
-        key: _tool_limit(params, key, default)
-        for key, default in defaults.items()
-    }
-    return limits
-
-
 def _build_execution_constraints(search_params: dict[str, Any] | None) -> str:
     params = search_params or {}
     depth = _normalize_research_depth(params)
-    limits = _resolve_tool_limits(params)
     mode_name = {
         "quick": "快速调研",
         "deep": "深度调研",
@@ -174,18 +135,18 @@ def _build_execution_constraints(search_params: dict[str, Any] | None) -> str:
     subagent_rule = (
         "由 Lead Agent 根据任务复杂度自行判断；内容较多、来源跨度大或需要多角度验证时，可调用 deep-search 或 researcher。"
         if not _subagents_disabled(params)
-        else "当前参数未分配子代理预算，不要调用 task 工具。"
+        else "当前参数禁用了子代理，不要调用 task 工具。"
     )
     return (
-        "执行约束:\n"
+        "执行建议:\n"
         f"- 当前模式: {mode_name}。\n"
-        f"- web_search 最多调用 {limits['web_search']} 次。\n"
-        f"- web_fetch 最多调用 {limits['web_fetch']} 次。\n"
+        "- web_search 用于发现候选网址、信息面和检索方向；不要把搜索摘要当作引用证据。\n"
+        "- web_fetch 用于读取候选网页并形成可引用证据；优先抓取与专项框架和关键争议直接相关的来源。\n"
         f"- task 子代理: {subagent_rule}\n"
-        f"- bash 最多调用 {limits['bash']} 次；普通网页调研不要调用 bash。\n"
+        "- bash 仅在需要处理本地文件、沙箱资料或命令行数据时使用；普通网页调研优先使用检索、抓取和结构化业务数据工具。\n"
         "- 不要按来源数量机械停止；当证据覆盖对象专项框架、关键争议点和主要不确定性后，再收束生成最终 Markdown 报告。\n"
         "- 如果搜索失败、网页不可访问或证据不足，不要反复扩大关键词范围，请在“风险与不确定性”中说明。\n"
-        "- 工具预算接近耗尽时，禁止继续调用工具，直接基于已有证据输出阶段性最终报告。\n"
+        "- 如果运行即将结束或工具不可用，直接基于已有证据输出阶段性最终报告。\n"
     )
 
 

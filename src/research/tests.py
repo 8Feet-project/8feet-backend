@@ -35,42 +35,29 @@ from research.interface.research_runtime import (
     build_initial_prompt,
     build_research_system_message,
     _resolve_max_turns,
-    _resolve_tool_limits,
 )
 
 
 class ResearchRuntimeConstraintTests(SimpleTestCase):
-    def test_standard_research_defaults_are_budgeted(self):
+    def test_standard_research_uses_default_turn_budget(self):
         self.assertEqual(_resolve_max_turns({}), 10)
-        self.assertEqual(
-            _resolve_tool_limits({}),
-            {
-                "web_search": 5,
-                "web_fetch": 6,
-                "bash": 0,
-            },
-        )
 
-    def test_deep_research_keeps_larger_budget(self):
+    def test_deep_research_keeps_larger_turn_budget(self):
         self.assertEqual(_resolve_max_turns({"research_depth": "deep"}), 18)
-        self.assertEqual(
-            _resolve_tool_limits({"research_depth": "deep"}),
-            {
-                "web_search": 12,
-                "web_fetch": 16,
-                "bash": 2,
-            },
-        )
 
-    def test_execution_constraints_tell_agent_to_finish_report(self):
+    def test_execution_constraints_do_not_limit_tool_call_counts(self):
         constraints = _build_execution_constraints({})
 
-        self.assertIn("web_search 最多调用 5 次", constraints)
-        self.assertIn("web_fetch 最多调用 6 次", constraints)
+        self.assertIn("执行建议", constraints)
+        self.assertIn("web_search 用于发现候选网址", constraints)
+        self.assertIn("web_fetch 用于读取候选网页", constraints)
         self.assertIn("task 子代理:", constraints)
         self.assertIn("自行判断", constraints)
         self.assertIn("deep-search 或 researcher", constraints)
+        self.assertIn("bash 仅在需要处理本地文件", constraints)
+        self.assertNotIn("最多调用", constraints)
         self.assertNotIn("task 子代理最多调用", constraints)
+        self.assertNotIn("工具预算", constraints)
         self.assertIn("不要按来源数量机械停止", constraints)
         self.assertNotIn("3 个以上可用来源", constraints)
         self.assertIn("直接基于已有证据输出阶段性最终报告", constraints)
@@ -79,12 +66,7 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
         constraints = _build_execution_constraints({"enable_subagents": False})
 
         self.assertIn("task 子代理:", constraints)
-        self.assertIn("当前参数未分配子代理预算", constraints)
-
-    def test_tool_limits_do_not_budget_subagent_calls(self):
-        self.assertNotIn("task", _resolve_tool_limits({}))
-        self.assertNotIn("task", _resolve_tool_limits({"research_depth": "quick"}))
-        self.assertNotIn("task", _resolve_tool_limits({"research_depth": "deep"}))
+        self.assertIn("当前参数禁用了子代理", constraints)
 
     def test_initial_prompt_includes_object_type_research_frameworks(self):
         cases = [
