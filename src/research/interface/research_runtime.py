@@ -100,7 +100,7 @@ def build_research_system_message() -> str:
         f"{citation_contract}"
         "所有结论都必须以已检索到的事实为基础，避免无依据推断。"
         "如果来源不足或部分工具失败，不要反复换关键词重试，请在风险与不确定性中说明。"
-        "最终报告文件只能由 Lead Agent 定稿，并在写入后调用 present_report。"
+        "最终详细报告和简版报告文件只能由 Lead Agent 定稿，并在全部写入后调用 present_report。"
         "不要让子代理产出最终报告文件。"
     )
 
@@ -144,7 +144,7 @@ def _build_execution_constraints(search_params: dict[str, Any] | None) -> str:
         "- web_fetch 用于读取候选网页并形成可引用证据；优先抓取与专项框架和关键争议直接相关的来源。\n"
         f"- task 子代理: {subagent_rule}\n"
         "- bash 仅在需要处理本地文件、沙箱资料或命令行数据时使用；普通网页调研优先使用检索、抓取和结构化业务数据工具。\n"
-        "- 不要按来源数量机械停止；当证据覆盖对象专项框架、关键争议点和主要不确定性后，再收束生成最终 Markdown 报告。\n"
+        "- 不要按来源数量机械停止；当证据覆盖对象专项框架、关键争议点和主要不确定性后，再收束生成最终详细版和简版 Markdown 报告。\n"
         "- 如果搜索失败、网页不可访问或证据不足，不要反复扩大关键词范围，请在“风险与不确定性”中说明。\n"
         "- 如果运行即将结束或工具不可用，直接基于已有证据输出阶段性最终报告。\n"
     )
@@ -159,10 +159,13 @@ def build_initial_prompt(task: ResearchTask) -> str:
     )
     object_requirements = object_type_research_requirements(task.object_type)
     workflow_contract = search_then_research_workflow()
-    report_contract = report_format_requirements("/mnt/user-data/outputs/research_report.md")
+    report_contract = report_format_requirements(
+        "/mnt/user-data/outputs/research_report.md",
+        "/mnt/user-data/outputs/research_report_brief.md",
+    )
     citation_contract = citation_discipline_requirements()
     return (
-        "请围绕以下商业对象开展一次商业调研，并输出结构化 Markdown 报告。\n\n"
+        "请围绕以下商业对象开展一次商业调研，并输出结构化 Markdown 详细报告与简版报告。\n\n"
         f"- 调研标题: {task.title}\n"
         f"- 调研对象: {task.object_name}\n"
         f"- 对象类型: {task.object_type}\n"
@@ -591,7 +594,9 @@ def _event_to_step(
             "COMPLETED",
             {
                 "path": report_event.path,
+                "brief_path": getattr(report_event, "brief_path", ""),
                 "content_length": len(report_event.content),
+                "brief_content_length": len(getattr(report_event, "brief_content", "") or ""),
                 "generated_reference_count": report_event.generated_reference_count,
                 "citation_keys": list(report_event.citation_keys),
                 "run_number": run_number,
@@ -739,10 +744,8 @@ def _persist_success(
     )
     citations = _extract_citations(state_snapshot)
     presented_reports = extract_presented_reports(state_snapshot)
-    has_new_presented_report_content = any(
-        report.content.strip()
-        for report in presented_reports[previous_presented_report_count:]
-    )
+    new_presented_reports = presented_reports[previous_presented_report_count:]
+    latest_new_presented_report = _latest_presented_report(new_presented_reports)
 
     with transaction.atomic():
         conversation.history_messages = serialized_history
@@ -782,8 +785,16 @@ def _persist_success(
             latency_ms=latency_ms,
         )
         has_persisted_report_rows = Report.objects.filter(task=task).count() > previous_report_row_count
-        if create_report and not has_new_presented_report_content and not has_persisted_report_rows:
-            _create_report(task, effective_output, citations)
+        if create_report and not has_persisted_report_rows:
+            if latest_new_presented_report is not None:
+                _create_report(
+                    task,
+                    latest_new_presented_report.content,
+                    [dict(item) for item in latest_new_presented_report.citations] or citations,
+                    brief_output=latest_new_presented_report.brief_content,
+                )
+            else:
+                _create_report(task, effective_output, citations)
 
         task.status = STATUS_COMPLETED
         task.progress = _merge_progress(
@@ -1009,6 +1020,13 @@ def _extract_citations(state_snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in citations if isinstance(item, dict)]
 
 
+def _latest_presented_report(reports: list[Any]) -> Any | None:
+    for report in reversed(reports):
+        if str(getattr(report, "content", "") or "").strip():
+            return report
+    return None
+
+
 def _persist_presented_report_event(task: ResearchTask, event: dict[str, Any]) -> Report | None:
     presented_report = extract_presented_report_event(event)
     if presented_report is None or not presented_report.content.strip():
@@ -1017,6 +1035,7 @@ def _persist_presented_report_event(task: ResearchTask, event: dict[str, Any]) -
         task,
         presented_report.content,
         [dict(item) for item in presented_report.citations],
+        brief_output=presented_report.brief_content,
     )
 
 
@@ -1092,6 +1111,7 @@ def _create_analysis_result(
             "run_number": run_number,
             "latency_ms": latency_ms,
             "state_snapshot": state_snapshot,
+            "skip_auto_report": True,
         },
     )
 
@@ -1100,6 +1120,8 @@ def _create_report(
     task: ResearchTask,
     final_output: str,
     citations: list[dict[str, Any]],
+    *,
+    brief_output: str | None = None,
 ) -> Report:
     latest_report = Report.objects.filter(task=task, is_latest=True).first()
     next_version = 1 if latest_report is None else latest_report.version + 1
@@ -1112,7 +1134,7 @@ def _create_report(
         title=task.title,
         summary=_extract_summary(final_output),
         content_markdown=final_output,
-        content_brief=_extract_summary(final_output),
+        content_brief=(brief_output or "").strip() or _extract_summary(final_output),
         version=next_version,
         is_latest=True,
     )

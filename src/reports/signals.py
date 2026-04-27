@@ -25,6 +25,8 @@ def generate_or_update_report_from_analysis(sender, instance: AnalysisResult, cr
     task = instance.task
     summary = (instance.conclusion or '').strip()[:500] or f"{task.title} 分析结果摘要"
     raw_output = instance.raw_output or {}
+    if raw_output.get('skip_auto_report'):
+        return
     full_markdown = (
         raw_output.get('report_markdown')
         or raw_output.get('markdown')

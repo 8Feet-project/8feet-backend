@@ -23,7 +23,7 @@ from research.models import (
     TaskStepLog,
 )
 
-from .artifacts import _report_paths_from_payloads
+from .artifacts import _latest_report_payload, _report_paths_from_payloads
 from .run_logs import _record_cross_step
 from .types import CrossModelSpec
 
@@ -157,6 +157,14 @@ def _persist_model_child_success(
 
     report_paths = _report_paths_from_payloads(presented_reports)
     citations = research_runtime._extract_citations(state_snapshot)
+    latest_report = _latest_report_payload(presented_reports)
+    latest_report_citations = latest_report.get("citations", []) if latest_report else []
+    report_citations = (
+        [item for item in latest_report_citations if isinstance(item, dict)]
+        if isinstance(latest_report_citations, list)
+        else []
+    )
+    brief_output = str(latest_report.get("brief_content") or "").strip() if latest_report else ""
     with transaction.atomic():
         analysis = AnalysisResult.objects.create(
             task=child_task,
@@ -172,9 +180,15 @@ def _persist_model_child_success(
                 "report_paths": report_paths,
                 "model": spec.public_payload(),
                 "latency_ms": latency_ms,
+                "skip_auto_report": True,
             },
         )
-        report = research_runtime._create_report(child_task, final_output, citations)
+        report = research_runtime._create_report(
+            child_task,
+            final_output,
+            report_citations or citations,
+            brief_output=brief_output,
+        )
         ResearchConversation.objects.update_or_create(
             task=child_task,
             defaults={

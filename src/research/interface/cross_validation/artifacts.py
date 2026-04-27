@@ -15,6 +15,7 @@ def _ensure_report_payloads(
     state_snapshot: dict[str, Any],
     final_output: str,
     fallback_filename: str,
+    fallback_brief_filename: str | None = None,
 ) -> list[dict[str, Any]]:
     reports = [report.to_payload() for report in extract_presented_reports(state_snapshot)]
     if reports:
@@ -31,11 +32,20 @@ def _ensure_report_payloads(
     output_dir = sandbox_paths.outputs_dir(thread_id)
     output_dir.mkdir(parents=True, exist_ok=True)
     fallback_path = output_dir / fallback_filename
+    brief_filename = fallback_brief_filename or _brief_filename_for(fallback_filename)
+    fallback_brief_path = output_dir / brief_filename
+    brief_text = research_runtime._extract_summary(text) or text[:1200]
+    fallback_path.parent.mkdir(parents=True, exist_ok=True)
+    fallback_brief_path.parent.mkdir(parents=True, exist_ok=True)
     fallback_path.write_text(text, encoding="utf-8")
+    fallback_brief_path.write_text(brief_text, encoding="utf-8")
     return [
         {
             "path": f"{OUTPUTS_VIRTUAL_PATH}/{fallback_filename}",
+            "full_path": f"{OUTPUTS_VIRTUAL_PATH}/{fallback_filename}",
             "content": text,
+            "brief_path": f"{OUTPUTS_VIRTUAL_PATH}/{brief_filename}",
+            "brief_content": brief_text,
             "citation_keys": [],
             "citations": [],
             "generated_reference_count": 0,
@@ -63,16 +73,51 @@ def _sanitize_report_payloads(
                 virtual_path=str(payload.get("path") or ""),
                 content=cleaned,
             )
+        brief_original = str(payload.get("brief_content") or "")
+        brief_cleaned = _strip_tool_call_markup(brief_original)
+        if brief_cleaned != brief_original:
+            payload["brief_content"] = brief_cleaned
+            _rewrite_output_report(
+                sandbox_paths=sandbox_paths,
+                thread_id=thread_id,
+                virtual_path=str(payload.get("brief_path") or ""),
+                content=brief_cleaned,
+            )
         sanitized.append(payload)
     return sanitized
 
 
 def _report_paths_from_payloads(reports: list[dict[str, Any]]) -> list[str]:
-    return [
-        str(item.get("path") or "").strip()
-        for item in reports
-        if str(item.get("path") or "").strip()
-    ]
+    paths: list[str] = []
+    seen: set[str] = set()
+    for item in reports:
+        for key in ("full_path", "path", "brief_path"):
+            path = str(item.get(key) or "").strip()
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            paths.append(path)
+    return paths
+
+
+def _latest_report_payload(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for report in reversed(reports):
+        if str(report.get("content") or "").strip():
+            return report
+    return None
+
+
+def _brief_filename_for(filename: str) -> str:
+    path = PurePosixPath(str(filename or "report.md"))
+    suffix = "".join(path.suffixes)
+    if suffix:
+        stem = path.name[: -len(suffix)]
+        brief_name = f"{stem}_brief{suffix}"
+    else:
+        brief_name = f"{path.name}_brief"
+    if str(path.parent) in {"", "."}:
+        return brief_name
+    return str(path.parent / brief_name)
 
 
 def _rewrite_output_report(

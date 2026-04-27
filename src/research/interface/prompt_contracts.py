@@ -9,22 +9,45 @@ REPORT_SECTION_HEADINGS = (
     "结论与建议",
 )
 
+BRIEF_REPORT_SECTION_HEADINGS = (
+    "摘要",
+    "核心结论",
+    "关键依据",
+    "风险提示",
+    "建议",
+)
 
-def report_format_requirements(report_path: str | None = None) -> str:
+
+def report_format_requirements(
+    full_report_path: str | None = None,
+    brief_report_path: str | None = None,
+) -> str:
     """Return the required final report delivery contract."""
-    path_rule = (
-        f"- 最终报告必须写入 `{report_path}`，并调用 present_report 展示该文件。\n"
-        if report_path
-        else "- 最终报告必须写入 Markdown 文件，并调用 present_report 展示该文件。\n"
-    )
-    headings = "\n".join(f"  - ## {heading}" for heading in REPORT_SECTION_HEADINGS)
+    if full_report_path and brief_report_path:
+        path_rule = (
+            f"- 详细报告必须写入 `{full_report_path}`。\n"
+            f"- 简版报告必须写入 `{brief_report_path}`。\n"
+            "- 两份报告都写入完成后，必须调用 "
+            f"`present_report(full_report_path=\"{full_report_path}\", "
+            f"brief_report_path=\"{brief_report_path}\")`。\n"
+        )
+    else:
+        path_rule = (
+            "- 最终必须同时写入详细版和简版两个 Markdown 文件，并调用 "
+            "`present_report(full_report_path=..., brief_report_path=...)` 展示这两份文件。\n"
+        )
+    detailed_headings = "\n".join(f"  - ## {heading}" for heading in REPORT_SECTION_HEADINGS)
+    brief_headings = "\n".join(f"  - ## {heading}" for heading in BRIEF_REPORT_SECTION_HEADINGS)
     return (
         "最终报告格式与交付要求:\n"
-        "- 报告必须是可直接用于下载、分享以及 PDF/Word 导出的中文 Markdown。\n"
-        "- 使用一个 `#` 一级标题作为报告标题，随后按以下 `##` 二级标题顺序输出:\n"
-        f"{headings}\n"
-        "- 正文段落要完整成句；必要时使用 Markdown 表格承载对比信息。\n"
-        "- 不要在最终报告中保留工具调用 JSON、过程日志、草稿占位符或未完成说明。\n"
+        "- 必须产出两份中文 Markdown 报告文本: 详细报告和简版报告，二者共享同一组 citations。\n"
+        "- 两份报告都使用一个 `#` 一级标题作为报告标题；标题中不要写“详版”“简版”“完整版”等版本说明。\n"
+        "- 详细报告用于下载、分享以及 PDF/Word 导出，随后按以下 `##` 二级标题顺序输出:\n"
+        f"{detailed_headings}\n"
+        "- 简版报告用于前端切换快速阅读，保留关键结论、最少但充分的证据和风险提示，随后按以下 `##` 二级标题顺序输出:\n"
+        f"{brief_headings}\n"
+        "- 两份报告的正文段落都要完整成句；必要时使用 Markdown 表格承载对比信息。\n"
+        "- 两份报告都不要保留工具调用 JSON、过程日志、草稿占位符或未完成说明。\n"
         f"{path_rule}"
     )
 

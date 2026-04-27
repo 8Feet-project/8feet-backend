@@ -297,6 +297,7 @@ def _run_single_model_thread(
             state_snapshot=state_snapshot,
             final_output=final_output,
             fallback_filename="model_research_report.md",
+            fallback_brief_filename="model_research_report_brief.md",
         )
         if not _report_paths_from_payloads(presented_reports):
             raise RuntimeError("模型调研线程未产出报告文件")
@@ -446,6 +447,7 @@ def _run_integrator_thread(
         state_snapshot=state_snapshot,
         final_output=final_output,
         fallback_filename="cross_validation_report.md",
+        fallback_brief_filename="cross_validation_report_brief.md",
     )
     if not _report_paths_from_payloads(presented_reports):
         raise RuntimeError("智能整合线程未产出报告文件")
