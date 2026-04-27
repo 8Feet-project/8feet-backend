@@ -113,6 +113,10 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
 
         self.assertIn("先 search", contract)
         self.assertIn("再 research", contract)
+        self.assertIn("canonical URL 去重", contract)
+        self.assertIn("authority_score", contract)
+        self.assertIn("优先官方披露、监管机构、交易所", contract)
+        self.assertIn("稳定 cite key", contract)
         self.assertIn("`deep-search`", contract)
         self.assertIn("`researcher`", contract)
         self.assertIn("不要按来源数量机械停止", contract)
