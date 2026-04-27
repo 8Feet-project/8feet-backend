@@ -47,7 +47,6 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
             {
                 "web_search": 5,
                 "web_fetch": 6,
-                "task": 2,
                 "bash": 0,
             },
         )
@@ -59,7 +58,6 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
             {
                 "web_search": 12,
                 "web_fetch": 16,
-                "task": 4,
                 "bash": 2,
             },
         )
@@ -69,9 +67,10 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
 
         self.assertIn("web_search 最多调用 5 次", constraints)
         self.assertIn("web_fetch 最多调用 6 次", constraints)
-        self.assertIn("task 子代理最多调用 2 次", constraints)
+        self.assertIn("task 子代理:", constraints)
         self.assertIn("自行判断", constraints)
         self.assertIn("deep-search 或 researcher", constraints)
+        self.assertNotIn("task 子代理最多调用", constraints)
         self.assertIn("不要按来源数量机械停止", constraints)
         self.assertNotIn("3 个以上可用来源", constraints)
         self.assertIn("直接基于已有证据输出阶段性最终报告", constraints)
@@ -79,14 +78,13 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
     def test_subagents_can_be_disabled_by_task_params(self):
         constraints = _build_execution_constraints({"enable_subagents": False})
 
-        self.assertIn("task 子代理最多调用 0 次", constraints)
+        self.assertIn("task 子代理:", constraints)
         self.assertIn("当前参数未分配子代理预算", constraints)
 
-    def test_quick_research_can_explicitly_enable_subagents(self):
-        self.assertEqual(
-            _resolve_tool_limits({"research_depth": "quick", "enable_subagents": True})["task"],
-            2,
-        )
+    def test_tool_limits_do_not_budget_subagent_calls(self):
+        self.assertNotIn("task", _resolve_tool_limits({}))
+        self.assertNotIn("task", _resolve_tool_limits({"research_depth": "quick"}))
+        self.assertNotIn("task", _resolve_tool_limits({"research_depth": "deep"}))
 
     def test_initial_prompt_includes_object_type_research_frameworks(self):
         cases = [

@@ -72,19 +72,16 @@ DEFAULT_MAX_TURNS = 10
 STANDARD_TOOL_LIMITS = {
     "web_search": 5,
     "web_fetch": 6,
-    "task": 2,
     "bash": 0,
 }
 QUICK_TOOL_LIMITS = {
     "web_search": 3,
     "web_fetch": 4,
-    "task": 0,
     "bash": 0,
 }
 DEEP_TOOL_LIMITS = {
     "web_search": 12,
     "web_fetch": 16,
-    "task": 4,
     "bash": 2,
 }
 MAX_WORKERS = 4
@@ -135,12 +132,20 @@ def _normalize_research_depth(search_params: dict[str, Any] | None) -> str:
 
 def _tool_limit(params: dict[str, Any], key: str, default: int) -> int:
     value = params.get(f"max_{key}_calls", params.get(f"{key}_max_calls", default))
-    if key == "task":
-        value = params.get("max_subagent_calls", params.get("subagent_max_calls", value))
     try:
         return max(0, int(value))
     except (TypeError, ValueError):
         return default
+
+
+def _subagents_disabled(params: dict[str, Any]) -> bool:
+    enable_subagents = params.get("enable_subagents")
+    return enable_subagents is False or str(enable_subagents).strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 def _resolve_tool_limits(search_params: dict[str, Any] | None) -> dict[str, int]:
@@ -155,14 +160,6 @@ def _resolve_tool_limits(search_params: dict[str, Any] | None) -> dict[str, int]
         key: _tool_limit(params, key, default)
         for key, default in defaults.items()
     }
-    enable_subagents = params.get("enable_subagents")
-    if enable_subagents is False or str(enable_subagents).strip().lower() in {"0", "false", "no", "off"}:
-        limits["task"] = 0
-    elif (
-        str(enable_subagents).strip().lower() in {"1", "true", "yes", "on"}
-        and limits["task"] == 0
-    ):
-        limits["task"] = STANDARD_TOOL_LIMITS["task"]
     return limits
 
 
@@ -176,7 +173,7 @@ def _build_execution_constraints(search_params: dict[str, Any] | None) -> str:
     }.get(depth, "标准调研")
     subagent_rule = (
         "由 Lead Agent 根据任务复杂度自行判断；内容较多、来源跨度大或需要多角度验证时，可调用 deep-search 或 researcher。"
-        if limits["task"] > 0
+        if not _subagents_disabled(params)
         else "当前参数未分配子代理预算，不要调用 task 工具。"
     )
     return (
@@ -184,7 +181,7 @@ def _build_execution_constraints(search_params: dict[str, Any] | None) -> str:
         f"- 当前模式: {mode_name}。\n"
         f"- web_search 最多调用 {limits['web_search']} 次。\n"
         f"- web_fetch 最多调用 {limits['web_fetch']} 次。\n"
-        f"- task 子代理最多调用 {limits['task']} 次，{subagent_rule}\n"
+        f"- task 子代理: {subagent_rule}\n"
         f"- bash 最多调用 {limits['bash']} 次；普通网页调研不要调用 bash。\n"
         "- 不要按来源数量机械停止；当证据覆盖对象专项框架、关键争议点和主要不确定性后，再收束生成最终 Markdown 报告。\n"
         "- 如果搜索失败、网页不可访问或证据不足，不要反复扩大关键词范围，请在“风险与不确定性”中说明。\n"
