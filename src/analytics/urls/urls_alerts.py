@@ -3,10 +3,10 @@
 """
 from django.urls import path
 from analytics.api.analytics_api import (
-    alert_create, alert_list
+    alert_collection, alert_detail
 )
 
 urlpatterns = [
-    path('', alert_list, name='alert-list'), # GET
-    path('', alert_create, name='alert-create'), # POST
+    path('', alert_collection, name='alert-collection'),
+    path('<int:alert_id>', alert_detail, name='alert-detail'),
 ]

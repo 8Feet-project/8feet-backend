@@ -7,7 +7,8 @@
 from django.contrib import admin
 from django.urls import path, include
 from eightfeet.health import healthz, readyz
-from llm_manager.api.llm_api import available_models, config_collection
+from llm_manager.api.llm_api import available_models
+from reports.api.report_api import public_shared_report
 from users.api.user_api import current_permissions
 
 urlpatterns = [
@@ -33,12 +34,13 @@ urlpatterns = [
         path('research/', include('research.urls')),
         # 报告
         path('reports/', include('reports.urls')),
+        path('public/reports/share/<str:share_id>', public_shared_report, name='public-shared-report'),
         # 收藏与提醒 (根据文档规划)
-        path('favorites/', include('analytics.urls_favorites')),
-        path('alerts/', include('analytics.urls_alerts')),
-        path('messages/', include('analytics.urls_messages')),
+        path('favorites/', include('analytics.urls.urls_favorites')),
+        path('alerts/', include('analytics.urls.urls_alerts')),
+        path('messages/', include('analytics.urls.urls_messages')),
         # 统计看板与日志 (管理端)
-        path('admin/dashboard/', include('analytics.urls_dashboard')),
-        path('admin/logs/', include('analytics.urls_logs')),
+        path('admin/dashboard/', include('analytics.urls.urls_dashboard')),
+        path('admin/logs/', include('analytics.urls.urls_logs')),
     ])),
 ]

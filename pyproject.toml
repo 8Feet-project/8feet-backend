@@ -27,6 +27,10 @@ dependencies = [
     "celery[redis]",
     "python-docx",
     "reportlab",
+]
+
+[project.optional-dependencies]
+research = [
     "efeet",
 ]
 

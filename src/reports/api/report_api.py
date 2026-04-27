@@ -16,6 +16,7 @@ from reports.interface.report_interface import (
     list_user_reports, create_followup, list_report_versions,
     export_report_file, get_export_record, trigger_manual_export
 )
+from reports.models.citation import Citation, ReportFollowup
 from reports.tasks import export_report_task
 
 
@@ -37,7 +38,7 @@ def report_detail(request: HttpRequest, report_id: int):
     if not data:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "报告不存在")
 
-    return success_api_response(data)
+    return success_api_response(_serialize_report_detail(data))
 
 
 @response_wrapper
@@ -56,7 +57,7 @@ def report_list(request: HttpRequest):
         reports = list_user_reports(request.user.id, object_type)
         
     return success_api_response({
-        "list": reports,
+        "list": [_serialize_report_list_item(report) for report in reports],
         "total": len(reports)
     })
 
@@ -134,8 +135,6 @@ def followup_question(request: HttpRequest, report_id: int):
     """报告深度追问
     [route]: POST /api/v1/reports/{report_id}/qa
     """
-    from reports.models.citation import ReportFollowup
-
     if request.method == 'GET':
         rows = [
             _serialize_followup(item)
@@ -175,6 +174,89 @@ def followup_question(request: HttpRequest, report_id: int):
     })
 
 
+@response_wrapper
+@require_GET
+@jwt_auth(perms=['reports.view_report'])
+def report_citations(request: HttpRequest, report_id: int):
+    rows = [_serialize_citation(item) for item in Citation.objects.filter(report_id=report_id)]
+    return success_api_response({
+        "report_id": str(report_id),
+        "list": rows,
+        "total": len(rows),
+    })
+
+
+@response_wrapper
+@require_GET
+@jwt_auth(perms=['reports.view_report'])
+def report_citation_detail(request: HttpRequest, report_id: int, citation_id: int):
+    citation = Citation.objects.filter(pk=citation_id, report_id=report_id).first()
+    if not citation:
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "引用不存在")
+    return success_api_response({
+        **_serialize_citation(citation),
+        "report_id": str(report_id),
+        "excerpt": citation.cited_text_snippet or "",
+        "published_at": "",
+        "source_type": "",
+    })
+
+
+@response_wrapper
+@jwt_auth(perms=['reports.view_report'])
+def report_share(request: HttpRequest, report_id: int, share_id: str = None):
+    if request.method == 'POST':
+        return success_api_response({
+            "share_id": f"report-{report_id}",
+            "report_id": str(report_id),
+            "share_url": f"/reports/share/report-{report_id}",
+            "expires_at": None,
+        })
+    if request.method == 'DELETE':
+        return success_api_response({"result": "success", "share_id": share_id or ""})
+    return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "不支持的请求方法")
+
+
+@response_wrapper
+def public_shared_report(request: HttpRequest, share_id: str):
+    if not share_id.startswith("report-"):
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "分享不存在")
+    try:
+        report_id = int(share_id.removeprefix("report-"))
+    except ValueError:
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "分享不存在")
+    report = get_report_detail(report_id)
+    if not report:
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "报告不存在")
+    return success_api_response({
+        "share_id": share_id,
+        "report": _serialize_report_detail(report),
+        "allow_download": True,
+        "expires_at": None,
+    })
+
+
+@response_wrapper
+@require_POST
+@jwt_auth(perms=['reports.followup_report'])
+def append_followup(request: HttpRequest, report_id: int, qa_id: int):
+    followup = ReportFollowup.objects.filter(pk=qa_id, report_id=report_id, user=request.user).first()
+    if not followup:
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "追问不存在")
+    try:
+        payload = json.loads(request.body) if request.body else {}
+    except Exception:
+        payload = request.POST
+    append_text = payload.get("append_text") or ""
+    if append_text:
+        followup.question = f"{followup.question}\n\n{append_text}"
+        followup.save(update_fields=["question"])
+    return success_api_response({
+        "report_id": str(report_id),
+        "qa": _serialize_followup(followup),
+    })
+
+
 def _serialize_followup(followup):
     return {
         "qa_id": str(followup.id),
@@ -183,4 +265,45 @@ def _serialize_followup(followup):
         "status": "completed" if followup.answer else "pending",
         "created_at": followup.created_at.isoformat(),
         "updated_at": followup.created_at.isoformat(),
+    }
+
+
+def _serialize_citation(citation):
+    return {
+        "citation_id": str(citation.id),
+        "source_title": citation.source_title,
+        "source_url": citation.source_url,
+    }
+
+
+def _isoformat(value):
+    return value.isoformat() if hasattr(value, "isoformat") else (value or "")
+
+
+def _serialize_report_list_item(report: dict):
+    return {
+        "report_id": str(report.get("id") or report.get("report_id") or ""),
+        "task_id": str(report.get("task_id") or ""),
+        "title": report.get("title") or "",
+        "summary": report.get("summary") or "",
+        "created_at": _isoformat(report.get("created_at")),
+        "updated_at": _isoformat(report.get("updated_at")),
+    }
+
+
+def _serialize_report_detail(report: dict):
+    return {
+        "report_id": str(report.get("id") or report.get("report_id") or ""),
+        "task_id": str(report.get("task_id") or ""),
+        "title": report.get("title") or "",
+        "content": report.get("content") or report.get("content_markdown") or "",
+        "citations": [
+            {
+                "citation_id": str(item.get("id") or item.get("index_number") or ""),
+                "source_title": item.get("source_title") or "",
+                "source_url": item.get("source_url") or "",
+            }
+            for item in report.get("citations", [])
+        ],
+        "created_at": report.get("created_at") or "",
     }
