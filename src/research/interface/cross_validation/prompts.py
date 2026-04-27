@@ -3,19 +3,29 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from research.interface.prompt_contracts import object_type_research_requirements
 from research.interface.thread_codec import json_safe
 from research.models import ResearchTask
 
 
 def build_cross_model_research_prompt(task: ResearchTask, base_prompt: str) -> str:
+    base_text = base_prompt.strip()
+    object_contract = object_type_research_requirements(getattr(task, "object_type", ""))
+    object_contract_block = ""
+    if "对象类型专项调研框架" not in base_text:
+        object_contract_block = (
+            "对象类型专项调研框架如下，必须优先覆盖后再补充通用商业分析维度:\n"
+            f"{object_contract}\n\n"
+        )
     return (
         "你现在是多模型交叉验证中的一个独立调研线程。"
         "请不要参考其他模型的输出，也不要等待外部人工反馈。"
         "请独立完成完整调研，写入 Markdown 报告文件，并调用 present_report 展示该报告。\n\n"
         "报告文件路径建议使用:\n"
         "/mnt/user-data/outputs/model_research_report.md\n\n"
+        f"{object_contract_block}"
         "原始调研任务如下:\n"
-        f"{base_prompt.strip()}"
+        f"{base_text}"
     )
 
 
@@ -36,6 +46,7 @@ def build_cross_integrator_prompt(
     copy_manifests: list[dict[str, Any]],
 ) -> str:
     manifest_json = json.dumps(json_safe(copy_manifests), ensure_ascii=False, indent=2)
+    object_contract = object_type_research_requirements(str(task_payload.get("object_type") or ""))
     results_overview = json.dumps(
         [
             {
@@ -59,6 +70,8 @@ def build_cross_integrator_prompt(
         f"- 标题: {task_payload.get('title')}\n"
         f"- 对象: {task_payload.get('object_name')}\n"
         f"- 类型: {task_payload.get('object_type')}\n\n"
+        "对象类型专项核查框架:\n"
+        f"{object_contract}\n\n"
         "每个模型线程的沙箱已经复制到当前线程 workspace 下。"
         "请优先读取 copied_path 指向的 presented report；必要时再阅读同目录下的 evidence、outputs 或 workspace 文件。\n\n"
         "复制清单:\n"
@@ -66,9 +79,10 @@ def build_cross_integrator_prompt(
         "模型输出概览:\n"
         f"```json\n{results_overview}\n```\n\n"
         "输出要求:\n"
-        "1. 提炼多模型一致支持的核心结论。\n"
-        "2. 标出模型间分歧、证据冲突或只有单一模型支持的观点。\n"
-        "3. 对证据质量和缺口做判断，必要时说明哪些结论需要人工复核。\n"
-        "4. 形成整合优化后的最终调研参考报告。\n"
-        "5. 将报告写入 /mnt/user-data/outputs/cross_validation_report.md 并调用 present_report。"
+        "1. 先按对象类型专项核查框架检查各模型报告是否覆盖关键维度。\n"
+        "2. 提炼多模型一致支持的核心结论。\n"
+        "3. 标出模型间分歧、证据冲突或只有单一模型支持的观点。\n"
+        "4. 对证据质量和缺口做判断，必要时说明哪些结论需要人工复核。\n"
+        "5. 形成整合优化后的最终调研参考报告。\n"
+        "6. 将报告写入 /mnt/user-data/outputs/cross_validation_report.md 并调用 present_report。"
     )

@@ -32,6 +32,7 @@ from llm_manager.interface.llm_interface import (
 )
 from llm_manager.models.llm_config import LLMConfig
 from reports.models.citation import Citation
+from research.interface.prompt_contracts import object_type_research_requirements
 from reports.models.report import Report
 from research.interface.thread_codec import (
     content_to_text,
@@ -196,14 +197,16 @@ def build_initial_prompt(task: ResearchTask) -> str:
         ensure_ascii=False,
         indent=2,
     )
+    object_requirements = object_type_research_requirements(task.object_type)
     return (
         "请围绕以下商业对象开展一次商业调研，并输出结构化 Markdown 报告。\n\n"
         f"- 调研标题: {task.title}\n"
         f"- 调研对象: {task.object_name}\n"
         f"- 对象类型: {task.object_type}\n"
+        f"\n{object_requirements}\n"
         "- 任务要求:\n"
         "  1. 先明确调研思路，再按执行约束少量调用必要工具补充证据。\n"
-        "  2. 覆盖对象概况、近期动态、行业/市场位置、主要风险与不确定性。\n"
+        "  2. 必须优先覆盖上方对象类型专项调研框架，再补充通用商业分析维度。\n"
         "  3. 优先引用高可信来源；如果结论来自带有引用键的信息源，请在结论后保留引用键。\n"
         "  4. 最终输出包含：摘要、核心发现、关键证据、风险与不确定性、结论与建议。\n"
         "  5. 不要为了追求完整性无限检索；证据不足时说明不确定性并完成报告。\n\n"

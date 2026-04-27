@@ -23,8 +23,10 @@ from research.interface.cross_validation_runtime import (
     build_cross_model_research_prompt,
     enqueue_cross_validation_run,
 )
+from research.interface.prompt_contracts import object_type_research_requirements
 from research.interface.research_runtime import (
     _build_execution_constraints,
+    build_initial_prompt,
     _resolve_max_turns,
     _resolve_tool_limits,
 )
@@ -63,6 +65,34 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
         self.assertIn("禁止启动子代理", constraints)
         self.assertIn("直接基于已有证据输出阶段性最终报告", constraints)
 
+    def test_initial_prompt_includes_object_type_research_frameworks(self):
+        cases = [
+            ("COMPANY", "对象类型专项调研框架（公司）", "企业身份与资质", "政策与监管"),
+            ("STOCK", "对象类型专项调研框架（股票）", "行情与估值", "财务与公告"),
+            ("PRODUCT", "对象类型专项调研框架（商品）", "价格与销量", "用户反馈"),
+        ]
+
+        for object_type, title, first_dimension, second_dimension in cases:
+            with self.subTest(object_type=object_type):
+                task = SimpleNamespace(
+                    title="专项调研",
+                    object_name="Acme",
+                    object_type=object_type,
+                    search_params={},
+                )
+
+                prompt = build_initial_prompt(task)
+
+                self.assertIn(title, prompt)
+                self.assertIn(first_dimension, prompt)
+                self.assertIn(second_dimension, prompt)
+
+    def test_object_type_contract_falls_back_to_generic_business_object(self):
+        contract = object_type_research_requirements("UNKNOWN")
+
+        self.assertIn("对象类型专项调研框架（通用商业对象）", contract)
+        self.assertIn("避免同名对象混淆", contract)
+
 
 class CrossValidationRuntimeTests(SimpleTestCase):
     def test_model_id_list_accepts_json_array_and_comma_text(self):
@@ -75,6 +105,8 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         prompt = build_cross_model_research_prompt(task, "base task")
 
         self.assertIn("独立调研线程", prompt)
+        self.assertIn("对象类型专项调研框架（公司）", prompt)
+        self.assertIn("企业身份与资质", prompt)
         self.assertIn("/mnt/user-data/outputs/model_research_report.md", prompt)
         self.assertIn("present_report", prompt)
 
@@ -105,6 +137,8 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         )
 
         self.assertIn("copied_path", prompt)
+        self.assertIn("对象类型专项核查框架", prompt)
+        self.assertIn("企业身份与资质", prompt)
         self.assertIn("cross_validation_report.md", prompt)
         self.assertIn("智能整合优化", prompt)
 
