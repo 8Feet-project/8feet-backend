@@ -26,6 +26,7 @@ urlpatterns = [
         # 平台初始化
         path('platform/', include('eightfeet.urls_platform')),
         # 大模型管理 (管理端)
+        path('admin/models', config_collection, name='admin-model-list-no-slash'),
         path('admin/models/', include('llm_manager.urls.urls_admin')),
         path('models/available', available_models, name='models-available'),
         path('model-routing/', include('llm_manager.urls.urls_routing')),
