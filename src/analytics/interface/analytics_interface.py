@@ -104,20 +104,20 @@ def get_dashboard_stats() -> dict:
     }
 
 
-def add_favorite(user_id: int, item_type: str, item_id: int,
+def add_favorite(user_id: int, item_type: str, item_id: str,
                  folder: str = None) -> bool:
     """添加收藏"""
     _, created = Favorite.objects.get_or_create(
-        user_id=user_id, item_type=item_type, item_id=item_id,
+        user_id=user_id, item_type=item_type, item_id=str(item_id),
         defaults={'folder': folder}
     )
     return created
 
 
-def remove_favorite(user_id: int, item_type: str, item_id: int) -> bool:
+def remove_favorite(user_id: int, item_type: str, item_id: str) -> bool:
     """取消收藏"""
     deleted, _ = Favorite.objects.filter(
-        user_id=user_id, item_type=item_type, item_id=item_id
+        user_id=user_id, item_type=item_type, item_id=str(item_id)
     ).delete()
     return deleted > 0
 
