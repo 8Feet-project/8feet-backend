@@ -10,7 +10,6 @@ from typing import Any
 from uuid import uuid4
 
 from django.db import close_old_connections, transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from efeet import (
@@ -1032,7 +1031,7 @@ def _resolve_model_spec(
 
     config = (
         LLMConfig.objects
-        .filter(Q(model_id=text) | Q(name=text))
+        .filter(name=text)
         .order_by("id")
         .first()
     )
