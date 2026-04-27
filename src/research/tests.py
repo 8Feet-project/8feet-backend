@@ -6,17 +6,19 @@ from unittest.mock import patch
 from django.test import SimpleTestCase
 from django.utils import timezone
 
-from research.interface import cross_validation_runtime
 from research.interface.cross_validation import model_specs as cross_model_specs
 from research.interface.cross_validation import orchestrator as cross_orchestrator
-from research.interface.cross_validation import records as cross_records
+from research.interface.cross_validation import result_records as cross_result_records
+from research.interface.cross_validation import task_records as cross_task_records
+from research.interface.cross_validation.artifacts import (
+    _is_llm_failure_output,
+    _strip_tool_call_markup,
+)
+from research.interface.cross_validation.model_specs import _coerce_model_id_list
+from research.interface.cross_validation.orchestrator import _integrator_candidates
+from research.interface.cross_validation.payloads import _payload_from_result
 from research.interface.cross_validation_runtime import (
     CrossModelSpec,
-    _coerce_model_id_list,
-    _integrator_candidates,
-    _is_llm_failure_output,
-    _payload_from_result,
-    _strip_tool_call_markup,
     build_cross_integrator_prompt,
     build_cross_model_research_prompt,
     enqueue_cross_validation_run,
@@ -185,9 +187,9 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         with patch.object(cross_model_specs.LLMConfig, "objects", EmptyConfigManager()):
             with patch.dict(os.environ, {"MODEL_API_KEY": "k", "MODEL_BASE_URL": "u"}):
                 with self.assertRaisesRegex(ValueError, "未在平台配置"):
-                    cross_validation_runtime._resolve_model_spec(task, "deepseek-v4-flash")
+                    cross_model_specs._resolve_model_spec(task, "deepseek-v4-flash")
 
-                spec = cross_validation_runtime._resolve_model_spec(
+                spec = cross_model_specs._resolve_model_spec(
                     task,
                     "deepseek-v4-flash",
                     allow_env_models=True,
@@ -243,19 +245,19 @@ class CrossValidationRuntimeTests(SimpleTestCase):
                 step_rows.append(kwargs)
                 return SimpleNamespace(**kwargs)
 
-        with patch.object(cross_records.ResearchTask, "objects", FakeTaskManager()):
-            with patch.object(cross_records.AnalysisResult, "objects", FakeAnalysisManager()):
-                with patch.object(cross_records.ResearchConversation, "objects", FakeConversationManager()):
-                    with patch.object(cross_records.TaskStepLog, "objects", FakeStepManager()):
-                        with patch.object(cross_records.transaction, "atomic", return_value=nullcontext()):
-                            with patch.object(cross_records.research_runtime, "_extract_citations", return_value=[]):
+        with patch.object(cross_task_records.ResearchTask, "objects", FakeTaskManager()):
+            with patch.object(cross_task_records.AnalysisResult, "objects", FakeAnalysisManager()):
+                with patch.object(cross_task_records.ResearchConversation, "objects", FakeConversationManager()):
+                    with patch.object(cross_task_records.TaskStepLog, "objects", FakeStepManager()):
+                        with patch.object(cross_task_records.transaction, "atomic", return_value=nullcontext()):
+                            with patch.object(cross_task_records.research_runtime, "_extract_citations", return_value=[]):
                                 with patch.object(
-                                    cross_records.research_runtime,
+                                    cross_task_records.research_runtime,
                                     "_create_report",
                                     return_value=SimpleNamespace(id=51),
                                 ) as create_report:
-                                    with patch.object(cross_records, "log_model_usage") as log_usage:
-                                        persisted = cross_records._persist_model_child_success(
+                                    with patch.object(cross_task_records, "log_model_usage") as log_usage:
+                                        persisted = cross_task_records._persist_model_child_success(
                                             child_task_id=child_task.id,
                                             run_id="run-1",
                                             spec=spec,
@@ -301,19 +303,19 @@ class CrossValidationRuntimeTests(SimpleTestCase):
                 step_rows.append(kwargs)
                 return SimpleNamespace(**kwargs)
 
-        with patch.object(cross_records.AnalysisResult, "objects", FakeAnalysisManager()):
-            with patch.object(cross_records.TaskStepLog, "objects", FakeStepManager()):
-                with patch.object(cross_records.transaction, "atomic", return_value=nullcontext()):
-                    with patch.object(cross_records.research_runtime, "_extract_citations", return_value=[]):
+        with patch.object(cross_result_records.AnalysisResult, "objects", FakeAnalysisManager()):
+            with patch.object(cross_result_records.TaskStepLog, "objects", FakeStepManager()):
+                with patch.object(cross_result_records.transaction, "atomic", return_value=nullcontext()):
+                    with patch.object(cross_result_records.research_runtime, "_extract_citations", return_value=[]):
                         with patch.object(
-                            cross_records.research_runtime,
+                            cross_result_records.research_runtime,
                             "_create_report",
                             return_value=SimpleNamespace(id=71),
                         ) as create_report:
-                            with patch.object(cross_records, "_update_cross_log"):
-                                with patch.object(cross_records, "_update_cross_progress"):
-                                    with patch.object(cross_records, "log_model_usage"):
-                                        cross_records._persist_cross_success(
+                            with patch.object(cross_result_records, "_update_cross_log"):
+                                with patch.object(cross_result_records, "_update_cross_progress"):
+                                    with patch.object(cross_result_records, "log_model_usage"):
+                                        cross_result_records._persist_cross_success(
                                             task=parent_task,
                                             run_id="run-1",
                                             prompt="prompt",
