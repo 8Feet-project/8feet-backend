@@ -7,6 +7,9 @@ from django.test import SimpleTestCase
 from django.utils import timezone
 
 from research.interface import cross_validation_runtime
+from research.interface.cross_validation import model_specs as cross_model_specs
+from research.interface.cross_validation import orchestrator as cross_orchestrator
+from research.interface.cross_validation import records as cross_records
 from research.interface.cross_validation_runtime import (
     CrossModelSpec,
     _coerce_model_id_list,
@@ -179,7 +182,7 @@ class CrossValidationRuntimeTests(SimpleTestCase):
             def first(self):
                 return None
 
-        with patch.object(cross_validation_runtime.LLMConfig, "objects", EmptyConfigManager()):
+        with patch.object(cross_model_specs.LLMConfig, "objects", EmptyConfigManager()):
             with patch.dict(os.environ, {"MODEL_API_KEY": "k", "MODEL_BASE_URL": "u"}):
                 with self.assertRaisesRegex(ValueError, "未在平台配置"):
                     cross_validation_runtime._resolve_model_spec(task, "deepseek-v4-flash")
@@ -240,19 +243,19 @@ class CrossValidationRuntimeTests(SimpleTestCase):
                 step_rows.append(kwargs)
                 return SimpleNamespace(**kwargs)
 
-        with patch.object(cross_validation_runtime.ResearchTask, "objects", FakeTaskManager()):
-            with patch.object(cross_validation_runtime.AnalysisResult, "objects", FakeAnalysisManager()):
-                with patch.object(cross_validation_runtime.ResearchConversation, "objects", FakeConversationManager()):
-                    with patch.object(cross_validation_runtime.TaskStepLog, "objects", FakeStepManager()):
-                        with patch.object(cross_validation_runtime.transaction, "atomic", return_value=nullcontext()):
-                            with patch.object(cross_validation_runtime.research_runtime, "_extract_citations", return_value=[]):
+        with patch.object(cross_records.ResearchTask, "objects", FakeTaskManager()):
+            with patch.object(cross_records.AnalysisResult, "objects", FakeAnalysisManager()):
+                with patch.object(cross_records.ResearchConversation, "objects", FakeConversationManager()):
+                    with patch.object(cross_records.TaskStepLog, "objects", FakeStepManager()):
+                        with patch.object(cross_records.transaction, "atomic", return_value=nullcontext()):
+                            with patch.object(cross_records.research_runtime, "_extract_citations", return_value=[]):
                                 with patch.object(
-                                    cross_validation_runtime.research_runtime,
+                                    cross_records.research_runtime,
                                     "_create_report",
                                     return_value=SimpleNamespace(id=51),
                                 ) as create_report:
-                                    with patch.object(cross_validation_runtime, "log_model_usage") as log_usage:
-                                        persisted = cross_validation_runtime._persist_model_child_success(
+                                    with patch.object(cross_records, "log_model_usage") as log_usage:
+                                        persisted = cross_records._persist_model_child_success(
                                             child_task_id=child_task.id,
                                             run_id="run-1",
                                             spec=spec,
@@ -298,19 +301,19 @@ class CrossValidationRuntimeTests(SimpleTestCase):
                 step_rows.append(kwargs)
                 return SimpleNamespace(**kwargs)
 
-        with patch.object(cross_validation_runtime.AnalysisResult, "objects", FakeAnalysisManager()):
-            with patch.object(cross_validation_runtime.TaskStepLog, "objects", FakeStepManager()):
-                with patch.object(cross_validation_runtime.transaction, "atomic", return_value=nullcontext()):
-                    with patch.object(cross_validation_runtime.research_runtime, "_extract_citations", return_value=[]):
+        with patch.object(cross_records.AnalysisResult, "objects", FakeAnalysisManager()):
+            with patch.object(cross_records.TaskStepLog, "objects", FakeStepManager()):
+                with patch.object(cross_records.transaction, "atomic", return_value=nullcontext()):
+                    with patch.object(cross_records.research_runtime, "_extract_citations", return_value=[]):
                         with patch.object(
-                            cross_validation_runtime.research_runtime,
+                            cross_records.research_runtime,
                             "_create_report",
                             return_value=SimpleNamespace(id=71),
                         ) as create_report:
-                            with patch.object(cross_validation_runtime, "_update_cross_log"):
-                                with patch.object(cross_validation_runtime, "_update_cross_progress"):
-                                    with patch.object(cross_validation_runtime, "log_model_usage"):
-                                        cross_validation_runtime._persist_cross_success(
+                            with patch.object(cross_records, "_update_cross_log"):
+                                with patch.object(cross_records, "_update_cross_progress"):
+                                    with patch.object(cross_records, "log_model_usage"):
+                                        cross_records._persist_cross_success(
                                             task=parent_task,
                                             run_id="run-1",
                                             prompt="prompt",
@@ -380,12 +383,12 @@ class CrossValidationEnqueueTests(SimpleTestCase):
             submitted["kwargs"] = kwargs
             return object()
 
-        with patch.object(cross_validation_runtime.ResearchTask, "objects", FakeTaskManager()):
-            with patch.object(cross_validation_runtime.TaskStepLog, "objects", FakeStepManager()):
-                with patch.object(cross_validation_runtime, "resolve_cross_model_specs", return_value=specs):
-                    with patch.object(cross_validation_runtime, "resolve_integrator_model_spec", return_value=specs[0]):
-                        with patch.object(cross_validation_runtime, "_update_cross_progress") as update_progress:
-                            with patch.object(cross_validation_runtime._CROSS_EXECUTOR, "submit", side_effect=fake_submit):
+        with patch.object(cross_orchestrator.ResearchTask, "objects", FakeTaskManager()):
+            with patch.object(cross_orchestrator.TaskStepLog, "objects", FakeStepManager()):
+                with patch.object(cross_orchestrator, "resolve_cross_model_specs", return_value=specs):
+                    with patch.object(cross_orchestrator, "resolve_integrator_model_spec", return_value=specs[0]):
+                        with patch.object(cross_orchestrator, "_update_cross_progress") as update_progress:
+                            with patch.object(cross_orchestrator._CROSS_EXECUTOR, "submit", side_effect=fake_submit):
                                 success, message, run_id = enqueue_cross_validation_run(
                                     task.id,
                                     requested_model_ids=["model-a", "model-b"],
@@ -393,7 +396,7 @@ class CrossValidationEnqueueTests(SimpleTestCase):
 
         self.assertTrue(success, message)
         self.assertIsNotNone(run_id)
-        self.assertEqual(submitted["fn"], cross_validation_runtime._run_cross_validation)
+        self.assertEqual(submitted["fn"], cross_orchestrator._run_cross_validation)
         self.assertEqual(created_logs[0]["step_name"], "多模型交叉验证")
         self.assertEqual(created_logs[0]["step_status"], "RUNNING")
         self.assertEqual(created_logs[0]["detail"]["status"], "queued")
@@ -420,7 +423,7 @@ class CrossValidationEnqueueTests(SimpleTestCase):
             def first(self):
                 return task
 
-        with patch.object(cross_validation_runtime.ResearchTask, "objects", FakeTaskManager()):
+        with patch.object(cross_orchestrator.ResearchTask, "objects", FakeTaskManager()):
             success, message, run_id = enqueue_cross_validation_run(task.id)
 
         self.assertFalse(success)
@@ -447,7 +450,7 @@ class CrossValidationEnqueueTests(SimpleTestCase):
             def first(self):
                 return task
 
-        with patch.object(cross_validation_runtime.ResearchTask, "objects", FakeTaskManager()):
+        with patch.object(cross_orchestrator.ResearchTask, "objects", FakeTaskManager()):
             success, message, run_id = enqueue_cross_validation_run(task.id)
 
         self.assertFalse(success)
