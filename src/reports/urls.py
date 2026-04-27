@@ -15,7 +15,7 @@ from reports.api.report_api import (
 
 urlpatterns = [
     path('', report_list, name='report-list'), # GET /api/v1/reports
-    path('exports/<int:export_id>/status', export_status, name='report-export-status'),
+    path('exports/<str:export_id>/status', export_status, name='report-export-status'),
     path('<int:report_id>', report_detail, name='report-detail'), # GET/PATCH
     path('<int:report_id>/citations', report_citations, name='report-citations'),
     path('<int:report_id>/citations/<int:citation_id>', report_citation_detail, name='report-citation-detail'),
