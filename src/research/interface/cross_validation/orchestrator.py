@@ -41,18 +41,20 @@ from .prompts import (
     build_cross_integrator_system_message,
     build_cross_model_research_prompt,
 )
-from .records import (
+from .result_records import _persist_cross_success
+from .run_logs import (
     _conversation_status,
-    _create_cross_model_child_tasks,
     _mark_cross_failed,
-    _mark_model_child_failed,
-    _mark_model_child_running,
-    _persist_cross_success,
-    _persist_model_child_success,
     _record_cross_event,
     _record_cross_step,
     _update_cross_log,
     _update_cross_progress,
+)
+from .task_records import (
+    _create_cross_model_child_tasks,
+    _mark_model_child_failed,
+    _mark_model_child_running,
+    _persist_model_child_success,
 )
 from .types import (
     CROSS_VALIDATION_DEFAULT_WORKERS,
