@@ -20,6 +20,7 @@ from efeet import (
     resolve_effective_output,
 )
 from efeet.sandbox.copy import copy_thread_sandbox_into_model_dir
+from efeet.sandbox.paths import OUTPUTS_VIRTUAL_PATH
 from llm_manager.interface.llm_interface import (
     get_provider_runtime_config,
     log_model_usage,
@@ -345,7 +346,13 @@ def _run_single_model_thread(
             serialized_history=serialized_history,
             create_report=True,
         )
-        presented_reports = [report.to_payload() for report in extract_presented_reports(state_snapshot)]
+        presented_reports = _ensure_report_payloads(
+            sandbox_paths=sandbox_paths,
+            thread_id=thread_id,
+            state_snapshot=state_snapshot,
+            final_output=final_output,
+            fallback_filename="model_research_report.md",
+        )
         latency_ms = round((perf_counter() - started_at) * 1000, 2)
         _record_cross_step(
             task_id,
@@ -463,7 +470,13 @@ def _run_integrator_thread(
         serialized_history=serialized_history,
         create_report=True,
     )
-    presented_reports = [report.to_payload() for report in extract_presented_reports(state_snapshot)]
+    presented_reports = _ensure_report_payloads(
+        sandbox_paths=sandbox_paths,
+        thread_id=thread_id,
+        state_snapshot=state_snapshot,
+        final_output=final_output,
+        fallback_filename="cross_validation_report.md",
+    )
     latency_ms = round((perf_counter() - started_at) * 1000, 2)
     _record_cross_step(
         task_id,
@@ -624,6 +637,38 @@ def _create_model(spec: CrossModelSpec):
         base_url=str(spec.runtime_config["base_url"]),
         debug_provider_http=bool(spec.runtime_config.get("debug_provider_http", False)),
     )
+
+
+def _ensure_report_payloads(
+    *,
+    sandbox_paths: SandboxPaths,
+    thread_id: str,
+    state_snapshot: dict[str, Any],
+    final_output: str,
+    fallback_filename: str,
+) -> list[dict[str, Any]]:
+    reports = [report.to_payload() for report in extract_presented_reports(state_snapshot)]
+    if reports:
+        return reports
+
+    text = str(final_output or "").strip()
+    if not text or text == research_runtime.STOPPED_MESSAGE:
+        return []
+
+    output_dir = sandbox_paths.outputs_dir(thread_id)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fallback_path = output_dir / fallback_filename
+    fallback_path.write_text(text, encoding="utf-8")
+    return [
+        {
+            "path": f"{OUTPUTS_VIRTUAL_PATH}/{fallback_filename}",
+            "content": text,
+            "citation_keys": [],
+            "citations": [],
+            "generated_reference_count": 0,
+            "fallback_generated": True,
+        }
+    ]
 
 
 def _coerce_model_id_list(value: Any) -> list[str]:
