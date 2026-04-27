@@ -1,3 +1,5 @@
+import os
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -164,18 +166,184 @@ class CrossValidationRuntimeTests(SimpleTestCase):
 
         self.assertEqual([item.model_name for item in candidates], ["model-a", "model-b"])
 
+    def test_env_model_names_are_rejected_unless_debug_flag_is_explicit(self):
+        task = SimpleNamespace(user=SimpleNamespace(id=3), object_type="COMPANY")
+
+        class EmptyConfigManager:
+            def filter(self, *args, **kwargs):
+                return self
+
+            def order_by(self, *args):
+                return self
+
+            def first(self):
+                return None
+
+        with patch.object(cross_validation_runtime.LLMConfig, "objects", EmptyConfigManager()):
+            with patch.dict(os.environ, {"MODEL_API_KEY": "k", "MODEL_BASE_URL": "u"}):
+                with self.assertRaisesRegex(ValueError, "未在平台配置"):
+                    cross_validation_runtime._resolve_model_spec(task, "deepseek-v4-flash")
+
+                spec = cross_validation_runtime._resolve_model_spec(
+                    task,
+                    "deepseek-v4-flash",
+                    allow_env_models=True,
+                )
+
+        self.assertEqual(spec.model_name, "deepseek-v4-flash")
+        self.assertIsNone(spec.llm_config_id)
+
+    def test_model_child_success_persists_report_on_child_task(self):
+        child_task = SimpleNamespace(
+            id=21,
+            user=SimpleNamespace(id=3),
+            title="Acme - model-a 交叉验证",
+            progress={},
+        )
+        spec = CrossModelSpec(
+            "model-a",
+            "model-a",
+            "provider-a",
+            {"model": "model-a", "api_key": "k", "base_url": "u"},
+            llm_config_id=5,
+            order=1,
+        )
+        analysis_rows = []
+        task_updates = []
+        step_rows = []
+
+        class FakeTaskManager:
+            def select_related(self, *args):
+                return self
+
+            def filter(self, **kwargs):
+                return self
+
+            def first(self):
+                return child_task
+
+            def update(self, **kwargs):
+                task_updates.append(kwargs)
+                return 1
+
+        class FakeAnalysisManager:
+            def create(self, **kwargs):
+                analysis_rows.append(kwargs)
+                return SimpleNamespace(id=31)
+
+        class FakeConversationManager:
+            def update_or_create(self, **kwargs):
+                return (SimpleNamespace(id=41), True)
+
+        class FakeStepManager:
+            def create(self, **kwargs):
+                step_rows.append(kwargs)
+                return SimpleNamespace(**kwargs)
+
+        with patch.object(cross_validation_runtime.ResearchTask, "objects", FakeTaskManager()):
+            with patch.object(cross_validation_runtime.AnalysisResult, "objects", FakeAnalysisManager()):
+                with patch.object(cross_validation_runtime.ResearchConversation, "objects", FakeConversationManager()):
+                    with patch.object(cross_validation_runtime.TaskStepLog, "objects", FakeStepManager()):
+                        with patch.object(cross_validation_runtime.transaction, "atomic", return_value=nullcontext()):
+                            with patch.object(cross_validation_runtime.research_runtime, "_extract_citations", return_value=[]):
+                                with patch.object(
+                                    cross_validation_runtime.research_runtime,
+                                    "_create_report",
+                                    return_value=SimpleNamespace(id=51),
+                                ) as create_report:
+                                    with patch.object(cross_validation_runtime, "log_model_usage") as log_usage:
+                                        persisted = cross_validation_runtime._persist_model_child_success(
+                                            child_task_id=child_task.id,
+                                            run_id="run-1",
+                                            spec=spec,
+                                            thread_id="thread-1",
+                                            prompt="prompt",
+                                            final_output="# Report",
+                                            serialized_history=[],
+                                            state_snapshot={},
+                                            presented_reports=[{"path": "/mnt/user-data/outputs/report.md"}],
+                                            latency_ms=12.3,
+                                        )
+
+        self.assertIs(create_report.call_args.args[0], child_task)
+        self.assertEqual(analysis_rows[0]["task"], child_task)
+        self.assertEqual(persisted["child_report_id"], 51)
+        self.assertEqual(task_updates[0]["status"], "COMPLETED")
+        self.assertEqual(step_rows[0]["task"], child_task)
+        log_usage.assert_called_once()
+
+    def test_cross_success_persists_integrated_report_on_parent_task(self):
+        parent_task = SimpleNamespace(
+            id=7,
+            user=SimpleNamespace(id=3),
+            title="Acme 深度调研",
+        )
+        integrator_spec = CrossModelSpec(
+            "integrator",
+            "integrator",
+            "provider-a",
+            {"model": "integrator", "api_key": "k", "base_url": "u"},
+            llm_config_id=9,
+        )
+        analysis_rows = []
+        step_rows = []
+
+        class FakeAnalysisManager:
+            def create(self, **kwargs):
+                analysis_rows.append(kwargs)
+                return SimpleNamespace(id=61)
+
+        class FakeStepManager:
+            def create(self, **kwargs):
+                step_rows.append(kwargs)
+                return SimpleNamespace(**kwargs)
+
+        with patch.object(cross_validation_runtime.AnalysisResult, "objects", FakeAnalysisManager()):
+            with patch.object(cross_validation_runtime.TaskStepLog, "objects", FakeStepManager()):
+                with patch.object(cross_validation_runtime.transaction, "atomic", return_value=nullcontext()):
+                    with patch.object(cross_validation_runtime.research_runtime, "_extract_citations", return_value=[]):
+                        with patch.object(
+                            cross_validation_runtime.research_runtime,
+                            "_create_report",
+                            return_value=SimpleNamespace(id=71),
+                        ) as create_report:
+                            with patch.object(cross_validation_runtime, "_update_cross_log"):
+                                with patch.object(cross_validation_runtime, "_update_cross_progress"):
+                                    with patch.object(cross_validation_runtime, "log_model_usage"):
+                                        cross_validation_runtime._persist_cross_success(
+                                            task=parent_task,
+                                            run_id="run-1",
+                                            prompt="prompt",
+                                            model_results=[{"child_task_id": 21, "status": "completed"}],
+                                            integrator_result={
+                                                "final_output": "# Integrated",
+                                                "state_snapshot": {},
+                                                "report_paths": ["/mnt/user-data/outputs/cross_validation_report.md"],
+                                            },
+                                            integrator_spec=integrator_spec,
+                                            latency_ms=20.0,
+                                            run_metadata={"source": "test"},
+                                        )
+
+        self.assertIs(create_report.call_args.args[0], parent_task)
+        self.assertEqual(analysis_rows[0]["task"], parent_task)
+        self.assertEqual(analysis_rows[0]["analysis_type"], "CROSS")
+        self.assertEqual(step_rows[0]["task"], parent_task)
+
 
 class CrossValidationEnqueueTests(SimpleTestCase):
     def test_enqueue_cross_validation_run_records_queued_log_without_running_models(self):
         task = SimpleNamespace(
             id=11,
             user=SimpleNamespace(id=3),
+            parent_task_id=None,
             title="Acme 深度调研",
             object_name="Acme",
             object_type="COMPANY",
             search_params={},
             progress={},
             status="COMPLETED",
+            conversation=None,
         )
         specs = [
             CrossModelSpec("model-a", "model-a", "env", {"model": "model-a", "api_key": "k", "base_url": "u"}, order=1),
@@ -231,3 +399,57 @@ class CrossValidationEnqueueTests(SimpleTestCase):
         self.assertEqual(created_logs[0]["detail"]["status"], "queued")
         self.assertEqual(created_logs[0]["detail"]["model_count"], 2)
         update_progress.assert_called_once()
+
+    def test_enqueue_cross_validation_requires_completed_parent_task(self):
+        task = SimpleNamespace(
+            id=12,
+            user=SimpleNamespace(id=3),
+            parent_task_id=None,
+            search_params={},
+            status="ANALYZING",
+            conversation=None,
+        )
+
+        class FakeTaskManager:
+            def select_related(self, *args):
+                return self
+
+            def filter(self, **kwargs):
+                return self
+
+            def first(self):
+                return task
+
+        with patch.object(cross_validation_runtime.ResearchTask, "objects", FakeTaskManager()):
+            success, message, run_id = enqueue_cross_validation_run(task.id)
+
+        self.assertFalse(success)
+        self.assertIn("主任务完成后", message)
+        self.assertIsNone(run_id)
+
+    def test_enqueue_cross_validation_rejects_running_parent_conversation(self):
+        task = SimpleNamespace(
+            id=13,
+            user=SimpleNamespace(id=3),
+            parent_task_id=None,
+            search_params={},
+            status="COMPLETED",
+            conversation=SimpleNamespace(status="RUNNING"),
+        )
+
+        class FakeTaskManager:
+            def select_related(self, *args):
+                return self
+
+            def filter(self, **kwargs):
+                return self
+
+            def first(self):
+                return task
+
+        with patch.object(cross_validation_runtime.ResearchTask, "objects", FakeTaskManager()):
+            success, message, run_id = enqueue_cross_validation_run(task.id)
+
+        self.assertFalse(success)
+        self.assertIn("仍在运行", message)
+        self.assertIsNone(run_id)

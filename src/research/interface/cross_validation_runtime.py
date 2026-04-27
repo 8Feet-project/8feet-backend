@@ -34,8 +34,16 @@ from research.interface.thread_codec import json_safe, serialize_history, serial
 from research.models import (
     AnalysisResult,
     ResearchTask,
+    ResearchConversation,
+    SESSION_STATUS_COMPLETED,
+    SESSION_STATUS_FAILED,
+    SESSION_STATUS_RUNNING,
+    STATUS_ANALYZING,
     STATUS_CANCELLED,
+    STATUS_COMPLETED,
     STATUS_FAILED,
+    STATUS_SEARCHING,
+    TASK_ROLE_CROSS_MODEL,
     TaskStepLog,
 )
 
@@ -74,6 +82,7 @@ def enqueue_cross_validation_run(
     integrator_model_id: Any = None,
     prompt: str | None = None,
     run_metadata: dict[str, Any] | None = None,
+    allow_env_models: bool = False,
 ) -> tuple[bool, str | None, str | None]:
     """Start a multi-model cross-validation run for an existing research task."""
     task = (
@@ -84,8 +93,14 @@ def enqueue_cross_validation_run(
     )
     if task is None:
         return (False, "任务不存在", None)
+    if task.parent_task_id is not None:
+        return (False, "多模型交叉验证只能在主任务上启动", None)
     if task.status in {STATUS_CANCELLED, STATUS_FAILED}:
         return (False, "任务状态不允许启动多模型交叉验证", None)
+    if task.status != STATUS_COMPLETED:
+        return (False, "主任务完成后才能启动多模型交叉验证", None)
+    if _conversation_status(task) == SESSION_STATUS_RUNNING:
+        return (False, "主任务会话仍在运行，请等待调研完成后再启动多模型交叉验证", None)
     if TaskStepLog.objects.filter(
         task=task,
         step_name=CROSS_VALIDATION_STEP_NAME,
@@ -94,8 +109,17 @@ def enqueue_cross_validation_run(
         return (False, "多模型交叉验证正在运行，请稍后再试", None)
 
     try:
-        specs = resolve_cross_model_specs(task, requested_model_ids)
-        integrator_spec = resolve_integrator_model_spec(task, integrator_model_id, specs)
+        specs = resolve_cross_model_specs(
+            task,
+            requested_model_ids,
+            allow_env_models=allow_env_models,
+        )
+        integrator_spec = resolve_integrator_model_spec(
+            task,
+            integrator_model_id,
+            specs,
+            allow_env_models=allow_env_models,
+        )
     except ValueError as exc:
         return (False, str(exc), None)
 
@@ -145,7 +169,12 @@ def enqueue_cross_validation_run(
     return (True, None, run_id)
 
 
-def resolve_cross_model_specs(task: ResearchTask, requested_model_ids: Any = None) -> list[CrossModelSpec]:
+def resolve_cross_model_specs(
+    task: ResearchTask,
+    requested_model_ids: Any = None,
+    *,
+    allow_env_models: bool = False,
+) -> list[CrossModelSpec]:
     raw_items = _coerce_model_id_list(requested_model_ids)
     if not raw_items:
         raw_items = _coerce_model_id_list((task.search_params or {}).get("multi_model_ids"))
@@ -157,7 +186,7 @@ def resolve_cross_model_specs(task: ResearchTask, requested_model_ids: Any = Non
     specs: list[CrossModelSpec] = []
     seen: set[str] = set()
     for item in raw_items:
-        spec = _resolve_model_spec(task, item)
+        spec = _resolve_model_spec(task, item, allow_env_models=allow_env_models)
         dedupe_key = f"{spec.provider}:{spec.model_name}".lower()
         if dedupe_key in seen:
             continue
@@ -170,22 +199,25 @@ def resolve_integrator_model_spec(
     task: ResearchTask,
     integrator_model_id: Any,
     model_specs: list[CrossModelSpec],
+    *,
+    allow_env_models: bool = False,
 ) -> CrossModelSpec:
     raw = str(integrator_model_id or "").strip()
     if raw:
-        return _resolve_model_spec(task, raw)
+        return _resolve_model_spec(task, raw, allow_env_models=allow_env_models)
     cross_params = (task.search_params or {}).get("cross_validation")
     if isinstance(cross_params, dict):
         raw = str(cross_params.get("integrator_model_id") or cross_params.get("integrator_model") or "").strip()
         if raw:
-            return _resolve_model_spec(task, raw)
+            return _resolve_model_spec(task, raw, allow_env_models=allow_env_models)
     if task.llm_config_id:
-        return _resolve_model_spec(task, str(task.llm_config_id))
+        return _resolve_model_spec(task, str(task.llm_config_id), allow_env_models=allow_env_models)
     if model_specs:
         return model_specs[0]
-    env_model = _env_first("EFEET_MODEL_NAME", "MODEL_NAME")
-    if env_model:
-        return _resolve_env_model_spec(env_model)
+    if allow_env_models:
+        env_model = _env_first("EFEET_MODEL_NAME", "MODEL_NAME")
+        if env_model:
+            return _resolve_env_model_spec(env_model)
     raise ValueError("未找到可用于智能整合的模型配置")
 
 
@@ -249,6 +281,7 @@ def _run_cross_validation(
         sandbox_paths = research_runtime._resolve_sandbox_paths(task.search_params) or SandboxPaths()
         task_payload = _task_prompt_payload(task)
         model_prompt = build_cross_model_research_prompt(task, prompt)
+        child_tasks = _create_cross_model_child_tasks(task, run_id, specs)
         worker_count = min(len(specs), _cross_worker_count(task.search_params))
         model_results: list[dict[str, Any]] = []
 
@@ -257,6 +290,7 @@ def _run_cross_validation(
                 executor.submit(
                     _run_single_model_thread,
                     task.id,
+                    child_tasks[int(spec.order or 0)].id,
                     run_id,
                     task_payload,
                     spec,
@@ -304,6 +338,7 @@ def _run_cross_validation(
 
 def _run_single_model_thread(
     task_id: int,
+    child_task_id: int,
     run_id: str,
     task_payload: dict[str, Any],
     spec: CrossModelSpec,
@@ -315,6 +350,7 @@ def _run_single_model_thread(
     thread_id = str(uuid4())
     order = int(spec.order or task_payload.get("model_order", {}).get(spec.model_key, 0) or 0)
     try:
+        _mark_model_child_running(child_task_id, run_id, spec, thread_id, prompt)
         _record_cross_step(
             task_id,
             run_id,
@@ -361,6 +397,18 @@ def _run_single_model_thread(
         if not _report_paths_from_payloads(presented_reports):
             raise RuntimeError("模型调研线程未产出报告文件")
         latency_ms = round((perf_counter() - started_at) * 1000, 2)
+        child_persisted = _persist_model_child_success(
+            child_task_id=child_task_id,
+            run_id=run_id,
+            spec=spec,
+            thread_id=thread_id,
+            prompt=prompt,
+            final_output=final_output,
+            serialized_history=serialized_history,
+            state_snapshot=state_snapshot,
+            presented_reports=presented_reports,
+            latency_ms=latency_ms,
+        )
         _record_cross_step(
             task_id,
             run_id,
@@ -368,6 +416,8 @@ def _run_single_model_thread(
             "COMPLETED",
             {
                 "thread_id": thread_id,
+                "child_task_id": child_task_id,
+                **child_persisted,
                 "model": spec.public_payload(),
                 "report_paths": _report_paths_from_payloads(presented_reports),
                 "latency_ms": latency_ms,
@@ -377,6 +427,8 @@ def _run_single_model_thread(
             "order": order,
             "status": "completed",
             "thread_id": thread_id,
+            "child_task_id": child_task_id,
+            **child_persisted,
             "model": spec.public_payload(),
             "final_output": final_output,
             "summary": research_runtime._extract_summary(final_output),
@@ -388,6 +440,7 @@ def _run_single_model_thread(
     except Exception as exc:
         latency_ms = round((perf_counter() - started_at) * 1000, 2)
         error = str(exc)
+        _mark_model_child_failed(child_task_id, run_id, spec, thread_id, error, latency_ms)
         _record_cross_step(
             task_id,
             run_id,
@@ -395,6 +448,7 @@ def _run_single_model_thread(
             "FAILED",
             {
                 "thread_id": thread_id,
+                "child_task_id": child_task_id,
                 "model": spec.public_payload(),
                 "error": error,
                 "latency_ms": latency_ms,
@@ -404,6 +458,7 @@ def _run_single_model_thread(
             "order": order,
             "status": "failed",
             "thread_id": thread_id,
+            "child_task_id": child_task_id,
             "model": spec.public_payload(),
             "final_output": "",
             "summary": "",
@@ -415,6 +470,319 @@ def _run_single_model_thread(
         }
     finally:
         close_old_connections()
+
+
+def _create_cross_model_child_tasks(
+    parent_task: ResearchTask,
+    run_id: str,
+    specs: list[CrossModelSpec],
+) -> dict[int, ResearchTask]:
+    children: dict[int, ResearchTask] = {}
+    created_payloads: list[dict[str, Any]] = []
+    with transaction.atomic():
+        for spec in specs:
+            order = int(spec.order or 0)
+            child = ResearchTask.objects.create(
+                user_id=parent_task.user_id,
+                parent_task=parent_task,
+                task_role=TASK_ROLE_CROSS_MODEL,
+                title=_cross_child_task_title(parent_task, spec),
+                object_name=parent_task.object_name,
+                object_type=parent_task.object_type,
+                llm_config_id=spec.llm_config_id,
+                search_params=_cross_child_search_params(parent_task, run_id, spec),
+                status=STATUS_SEARCHING,
+                progress=_model_child_progress(run_id, "queued", searching=5),
+            )
+            children[order] = child
+            payload = {
+                "child_task_id": child.id,
+                "model": spec.public_payload(),
+                "status": "queued",
+            }
+            created_payloads.append(payload)
+            TaskStepLog.objects.create(
+                task=child,
+                step_name="交叉验证模型子任务已创建",
+                step_status="COMPLETED",
+                detail={
+                    "cross_validation_run_id": run_id,
+                    **json_safe(payload),
+                },
+            )
+
+    _record_cross_step(
+        parent_task.id,
+        run_id,
+        "创建交叉验证模型子任务",
+        "COMPLETED",
+        {"child_tasks": created_payloads},
+    )
+    return children
+
+
+def _cross_child_task_title(parent_task: ResearchTask, spec: CrossModelSpec) -> str:
+    title = f"{parent_task.title} - {spec.model_name} 交叉验证"
+    return title[:256]
+
+
+def _cross_child_search_params(
+    parent_task: ResearchTask,
+    run_id: str,
+    spec: CrossModelSpec,
+) -> dict[str, Any]:
+    params = dict(parent_task.search_params or {})
+    params["cross_validation_child"] = {
+        "parent_task_id": parent_task.id,
+        "cross_validation_run_id": run_id,
+        "model": spec.public_payload(),
+    }
+    return json_safe(params)
+
+
+def _mark_model_child_running(
+    child_task_id: int,
+    run_id: str,
+    spec: CrossModelSpec,
+    thread_id: str,
+    prompt: str,
+) -> None:
+    now = timezone.now()
+    ResearchConversation.objects.update_or_create(
+        task_id=child_task_id,
+        defaults={
+            "thread_id": thread_id,
+            "system_message": research_runtime.build_research_system_message(),
+            "status": SESSION_STATUS_RUNNING,
+            "latest_user_message": prompt.strip(),
+            "last_error": "",
+            "run_count": 1,
+            "last_started_at": now,
+        },
+    )
+    ResearchTask.objects.filter(pk=child_task_id).update(
+        status=STATUS_SEARCHING,
+        progress=_model_child_progress(run_id, "running", searching=20, thread_id=thread_id),
+        updated_at=now,
+    )
+    TaskStepLog.objects.create(
+        task_id=child_task_id,
+        step_name=f"[cross:{spec.model_name}] 模型调研启动",
+        step_status="RUNNING",
+        detail={
+            "cross_validation_run_id": run_id,
+            "thread_id": thread_id,
+            "model": spec.public_payload(),
+        },
+    )
+
+
+def _persist_model_child_success(
+    *,
+    child_task_id: int,
+    run_id: str,
+    spec: CrossModelSpec,
+    thread_id: str,
+    prompt: str,
+    final_output: str,
+    serialized_history: list[dict[str, Any]],
+    state_snapshot: dict[str, Any],
+    presented_reports: list[dict[str, Any]],
+    latency_ms: float,
+) -> dict[str, Any]:
+    child_task = (
+        ResearchTask.objects
+        .select_related("user")
+        .filter(pk=child_task_id)
+        .first()
+    )
+    if child_task is None:
+        raise RuntimeError(f"交叉验证模型子任务不存在: {child_task_id}")
+
+    report_paths = _report_paths_from_payloads(presented_reports)
+    citations = research_runtime._extract_citations(state_snapshot)
+    with transaction.atomic():
+        analysis = AnalysisResult.objects.create(
+            task=child_task,
+            llm_config_id=spec.llm_config_id,
+            analysis_type="SINGLE",
+            conclusion=research_runtime._extract_summary(final_output),
+            raw_output={
+                "cross_validation_run_id": run_id,
+                "prompt": prompt,
+                "final_output": final_output,
+                "state_snapshot": state_snapshot,
+                "presented_reports": json_safe(presented_reports),
+                "report_paths": report_paths,
+                "model": spec.public_payload(),
+                "latency_ms": latency_ms,
+            },
+        )
+        report = research_runtime._create_report(child_task, final_output, citations)
+        ResearchConversation.objects.update_or_create(
+            task=child_task,
+            defaults={
+                "thread_id": thread_id,
+                "system_message": research_runtime.build_research_system_message(),
+                "status": SESSION_STATUS_COMPLETED,
+                "history_messages": serialized_history,
+                "state_snapshot": state_snapshot,
+                "latest_user_message": prompt.strip(),
+                "latest_assistant_message": final_output,
+                "last_error": "",
+                "run_count": 1,
+                "last_finished_at": timezone.now(),
+            },
+        )
+        ResearchTask.objects.filter(pk=child_task_id).update(
+            status=STATUS_COMPLETED,
+            progress=_model_child_progress(
+                run_id,
+                "completed",
+                searching=100,
+                analyzing=100,
+                report=100,
+                analysis_result_id=analysis.id,
+                report_id=report.id,
+            ),
+            updated_at=timezone.now(),
+        )
+        TaskStepLog.objects.create(
+            task=child_task,
+            step_name=f"[cross:{spec.model_name}] 模型调研完成",
+            step_status="COMPLETED",
+            detail={
+                "cross_validation_run_id": run_id,
+                "analysis_result_id": analysis.id,
+                "report_id": report.id,
+                "report_paths": report_paths,
+                "latency_ms": latency_ms,
+            },
+        )
+
+    log_model_usage(
+        child_task.user,
+        spec.llm_config_id,
+        f"research-cross-model-{child_task_id}-{run_id}",
+        prompt_tokens=0,
+        completion_tokens=0,
+        latency_ms=int(latency_ms or 0),
+        usage_type="GENERAL",
+    )
+    return {
+        "child_analysis_result_id": analysis.id,
+        "child_report_id": report.id,
+        "child_report_paths": report_paths,
+    }
+
+
+def _mark_model_child_failed(
+    child_task_id: int,
+    run_id: str,
+    spec: CrossModelSpec,
+    thread_id: str,
+    error: str,
+    latency_ms: float,
+) -> None:
+    now = timezone.now()
+    child_task = (
+        ResearchTask.objects
+        .select_related("user")
+        .filter(pk=child_task_id)
+        .first()
+    )
+    if child_task is None:
+        return
+    ResearchConversation.objects.update_or_create(
+        task_id=child_task_id,
+        defaults={
+            "thread_id": thread_id,
+            "system_message": research_runtime.build_research_system_message(),
+            "status": SESSION_STATUS_FAILED,
+            "last_error": error,
+            "run_count": 1,
+            "last_finished_at": now,
+        },
+    )
+    ResearchTask.objects.filter(pk=child_task_id).update(
+        status=STATUS_FAILED,
+        progress=_model_child_progress(
+            run_id,
+            "failed",
+            searching=100,
+            analyzing=100,
+            report=0,
+            thread_id=thread_id,
+            error=error,
+        ),
+        updated_at=now,
+    )
+    TaskStepLog.objects.create(
+        task_id=child_task_id,
+        step_name=f"[cross:{spec.model_name}] 模型调研失败",
+        step_status="FAILED",
+        detail={
+            "cross_validation_run_id": run_id,
+            "thread_id": thread_id,
+            "model": spec.public_payload(),
+            "error": error,
+            "latency_ms": latency_ms,
+        },
+    )
+    log_model_usage(
+        child_task.user,
+        spec.llm_config_id,
+        f"research-cross-model-{child_task_id}-{run_id}",
+        prompt_tokens=0,
+        completion_tokens=0,
+        latency_ms=int(latency_ms or 0),
+        usage_type="GENERAL",
+    )
+
+
+def _model_child_progress(
+    run_id: str,
+    status: str,
+    *,
+    searching: int = 0,
+    analyzing: int = 0,
+    report: int = 0,
+    **extra: Any,
+) -> dict[str, Any]:
+    if status == "completed":
+        stage = STATUS_COMPLETED
+    elif status == "failed":
+        stage = STATUS_FAILED
+    elif status == "running":
+        stage = STATUS_SEARCHING
+    elif status not in {"queued", "running", "completed", "failed"}:
+        stage = STATUS_ANALYZING
+    else:
+        stage = STATUS_SEARCHING
+    return {
+        "searching": searching,
+        "analyzing": analyzing,
+        "report": report,
+        "stage": stage,
+        "cross_validation": {
+            "run_id": run_id,
+            "status": status,
+            "updated_at": timezone.now().isoformat(),
+            **json_safe(extra),
+        },
+    }
+
+
+def _cross_model_input_directory(result: dict[str, Any]) -> str:
+    model = result.get("model") if isinstance(result.get("model"), dict) else {}
+    parts = [
+        f"{int(result.get('order') or 0):02d}",
+        str(model.get("provider") or "model"),
+        str(model.get("llm_config_id") or model.get("model_key") or model.get("model_id") or "runtime"),
+        str(result.get("child_task_id") or "task"),
+        str(model.get("model_name") or "model"),
+    ]
+    return "-".join(part for part in parts if part)
 
 
 def _run_integrator_thread(
@@ -435,6 +803,7 @@ def _run_integrator_thread(
             source_thread_id=str(result["thread_id"]),
             target_thread_id=thread_id,
             model_name=str(result.get("model", {}).get("model_name") or "model"),
+            directory_name=_cross_model_input_directory(result),
             report_paths=list(result.get("report_paths") or []),
         )
         manifest.pop("thread_data", None)
@@ -617,6 +986,8 @@ def build_cross_integrator_prompt(
                 "status": item.get("status"),
                 "model": item.get("model"),
                 "thread_id": item.get("thread_id"),
+                "child_task_id": item.get("child_task_id"),
+                "child_report_id": item.get("child_report_id"),
                 "summary": item.get("summary"),
                 "report_paths": item.get("report_paths", []),
                 "error": item.get("error", ""),
@@ -647,7 +1018,12 @@ def build_cross_integrator_prompt(
     )
 
 
-def _resolve_model_spec(task: ResearchTask, raw_id: Any) -> CrossModelSpec:
+def _resolve_model_spec(
+    task: ResearchTask,
+    raw_id: Any,
+    *,
+    allow_env_models: bool = False,
+) -> CrossModelSpec:
     text = str(raw_id or "").strip()
     if not text:
         raise ValueError("模型 ID 不能为空")
@@ -664,6 +1040,8 @@ def _resolve_model_spec(task: ResearchTask, raw_id: Any) -> CrossModelSpec:
         if not user_can_use_model(task.user, config):
             raise ValueError(f"当前用户无权使用模型: {text}")
         return _resolve_config_model_spec(task, config.id)
+    if not allow_env_models:
+        raise ValueError(f"模型 {text} 未在平台配置中找到或当前用户无权使用")
     return _resolve_env_model_spec(text)
 
 
@@ -1063,6 +1441,14 @@ def _latest_cross_log(task: ResearchTask) -> TaskStepLog | None:
     )
 
 
+def _conversation_status(task: ResearchTask) -> str:
+    try:
+        conversation = getattr(task, "conversation", None)
+    except Exception:
+        return ""
+    return str(getattr(conversation, "status", "") or "")
+
+
 def _empty_cross_payload(task: ResearchTask) -> dict[str, Any]:
     return {
         "task_id": str(task.id),
@@ -1117,6 +1503,8 @@ def _public_model_output(item: dict[str, Any]) -> dict[str, Any]:
         "status": item.get("status"),
         "model": model,
         "thread_id": item.get("thread_id"),
+        "child_task_id": item.get("child_task_id"),
+        "child_report_id": item.get("child_report_id"),
         "summary": item.get("summary"),
         "report_paths": item.get("report_paths", []),
         "presented_reports": [

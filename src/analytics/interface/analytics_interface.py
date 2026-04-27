@@ -41,9 +41,10 @@ def get_dashboard_stats() -> dict:
     thirty_days_ago = now - timedelta(days=30)
 
     # 1. 调研任务统计
-    total_tasks = ResearchTask.objects.count()
+    primary_tasks = ResearchTask.objects.filter(parent_task__isnull=True)
+    total_tasks = primary_tasks.count()
     type_stats = list(
-        ResearchTask.objects.values('object_type')
+        primary_tasks.values('object_type')
         .annotate(count=Count('id'))
         .order_by('-count')
     )

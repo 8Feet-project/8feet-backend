@@ -11,8 +11,8 @@ from research.models.task_step_log import TaskStepLog
 
 @admin.register(ResearchTask)
 class ResearchTaskAdmin(admin.ModelAdmin):
-    list_display = ['title', 'user', 'object_type', 'status', 'created_at']
-    list_filter = ['status', 'object_type']
+    list_display = ['title', 'user', 'object_type', 'task_role', 'parent_task', 'status', 'created_at']
+    list_filter = ['status', 'object_type', 'task_role']
     search_fields = ['title', 'object_name']
 
 
