@@ -60,8 +60,10 @@ def search_then_research_workflow() -> str:
     return (
         "DeepSearch 工作流建议:\n"
         "- 由 Lead Agent 根据任务复杂度判断调研深度、检索范围和是否需要子代理协作。\n"
-        "- 先 search: 使用 web_search 或结构化业务数据工具识别信息面、候选来源、关键维度和明显争议点。\n"
+        "- 先 search: 使用 web_search 或结构化业务数据工具识别信息面、候选来源、关键维度和明显争议点；"
+        "web_search 结果已按 canonical URL 去重并附带 source_category/authority_score，选源时优先官方披露、监管机构、交易所、结构化数据和权威财经媒体。\n"
         "- 再 research: 对高价值候选来源使用 web_fetch 或结构化工具获取可引用证据，并围绕对象专项框架验证、归纳和证伪。\n"
+        "- 证据入库时会尽量复用稳定 cite key：同一 canonical URL、同一复现代码，或同一小时内的实时数据快照，应视为同一证据来源。\n"
         "- 当任务内容较多、来源跨度大、需要多角度发散或需要剔除噪声时，可以调用 task 工具的 "
         "`deep-search` 子代理分角度搜索、筛选并沉淀 evidence 文件。\n"
         "- 当已有 evidence 但需要提出观点、比较证据、验证或证伪判断时，可以调用 task 工具的 "
