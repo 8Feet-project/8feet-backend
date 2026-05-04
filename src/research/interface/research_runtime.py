@@ -10,21 +10,60 @@ import os
 from pathlib import Path
 import re
 from time import perf_counter
+from types import SimpleNamespace
 from typing import Any
 
 from django.db import close_old_connections, transaction
 from django.utils import timezone
 from dotenv import load_dotenv
 
-from efeet import (
-    SandboxPaths,
-    STOPPED_MESSAGE,
-    create_chat_model,
-    create_thread,
-    extract_presented_report_event,
-    extract_presented_reports,
-    resolve_effective_output,
-)
+try:
+    from efeet import (
+        SandboxPaths,
+        STOPPED_MESSAGE,
+        create_chat_model,
+        create_thread,
+        extract_presented_report_event,
+        extract_presented_reports,
+        resolve_effective_output,
+    )
+except Exception as exc:
+    _EFEET_IMPORT_ERROR = exc
+    STOPPED_MESSAGE = "__STOPPED__"
+
+    class SandboxPaths:
+        def __init__(self, *args, **kwargs):
+            raise ModuleNotFoundError(f"efeet runtime is unavailable: {_EFEET_IMPORT_ERROR}")
+
+    def _missing_efeet(*args, **kwargs):
+        raise ModuleNotFoundError(f"efeet runtime is unavailable: {_EFEET_IMPORT_ERROR}")
+
+    create_chat_model = _missing_efeet
+    create_thread = _missing_efeet
+    resolve_effective_output = _missing_efeet
+
+    def extract_presented_report_event(event):
+        if not isinstance(event, dict) or str(event.get("type") or "") != "report_presented":
+            return None
+        content = str(event.get("content") or "")
+        if not content.strip():
+            return None
+        citations = event.get("citations")
+        if not isinstance(citations, list):
+            citations = []
+        return SimpleNamespace(
+            path=str(event.get("path") or ""),
+            full_path=str(event.get("full_path") or event.get("path") or ""),
+            brief_path=str(event.get("brief_path") or ""),
+            content=content,
+            brief_content=str(event.get("brief_content") or ""),
+            citations=[item for item in citations if isinstance(item, dict)],
+        )
+
+    def extract_presented_reports(_state_snapshot):
+        return []
+else:
+    _EFEET_IMPORT_ERROR = None
 from llm_manager.interface.llm_interface import (
     get_provider_runtime_config,
     log_model_usage,

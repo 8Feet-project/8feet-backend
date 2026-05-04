@@ -5,7 +5,6 @@ import json
 import os
 from typing import Any
 
-from efeet import create_chat_model
 from llm_manager.interface.llm_interface import (
     get_provider_runtime_config,
     resolve_user_model_config,
@@ -138,6 +137,8 @@ def _resolve_env_model_spec(model_name: str) -> CrossModelSpec:
 
 
 def _create_model(spec: CrossModelSpec):
+    from efeet import create_chat_model
+
     return create_chat_model(
         model=str(spec.runtime_config["model"]),
         api_key=str(spec.runtime_config["api_key"]),

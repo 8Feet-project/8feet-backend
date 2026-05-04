@@ -3,9 +3,17 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 from typing import Any
 
-from efeet import SandboxPaths, extract_presented_reports
-from efeet.sandbox.paths import OUTPUTS_VIRTUAL_PATH
 from research.interface import research_runtime
+
+try:
+    from efeet import SandboxPaths, extract_presented_reports
+    from efeet.sandbox.paths import OUTPUTS_VIRTUAL_PATH
+except Exception:
+    SandboxPaths = Any
+    OUTPUTS_VIRTUAL_PATH = "/mnt/user-data/outputs"
+
+    def extract_presented_reports(_state_snapshot):
+        return []
 
 
 def _ensure_report_payloads(

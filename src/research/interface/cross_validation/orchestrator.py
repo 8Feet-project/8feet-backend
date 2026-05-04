@@ -7,12 +7,28 @@ from uuid import uuid4
 
 from django.db import close_old_connections
 
-from efeet import (
-    SandboxPaths,
-    create_thread,
-    resolve_effective_output,
-)
-from efeet.sandbox.copy import copy_thread_sandbox_into_model_dir
+try:
+    from efeet import (
+        SandboxPaths,
+        create_thread,
+        resolve_effective_output,
+    )
+    from efeet.sandbox.copy import copy_thread_sandbox_into_model_dir
+except Exception as exc:
+    _EFEET_IMPORT_ERROR = exc
+
+    class SandboxPaths:
+        def __init__(self, *args, **kwargs):
+            raise ModuleNotFoundError(f"efeet runtime is unavailable: {_EFEET_IMPORT_ERROR}")
+
+    def _missing_efeet(*args, **kwargs):
+        raise ModuleNotFoundError(f"efeet runtime is unavailable: {_EFEET_IMPORT_ERROR}")
+
+    create_thread = _missing_efeet
+    resolve_effective_output = _missing_efeet
+    copy_thread_sandbox_into_model_dir = _missing_efeet
+else:
+    _EFEET_IMPORT_ERROR = None
 from research.interface import research_runtime
 from research.interface.thread_codec import json_safe, serialize_history, serialize_state
 from research.models import (
