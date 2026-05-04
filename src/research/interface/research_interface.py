@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import List, Optional, Tuple
 from uuid import uuid4
 
@@ -29,6 +30,56 @@ from research.models.task_step_log import TaskStepLog
 
 
 logger = logging.getLogger(__name__)
+
+AUTO_OBJECT_TYPE_VALUES = {"", "auto", "自动识别", "自动"}
+
+STOCK_CODE_RE = re.compile(
+    r"^\s*(?:"
+    r"\d{6}(?:\.(?:SH|SZ|BJ))?"
+    r"|[A-Z]{1,5}(?:\.(?:US|O|N|NYSE|NASDAQ))?"
+    r"|\d{4,5}(?:\.HK)?"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+PRODUCT_KEYWORDS = {
+    "商品",
+    "期货",
+    "原油",
+    "天然气",
+    "黄金",
+    "白银",
+    "铜",
+    "铝",
+    "锌",
+    "镍",
+    "螺纹钢",
+    "铁矿石",
+    "焦煤",
+    "焦炭",
+    "动力煤",
+    "大豆",
+    "豆粕",
+    "玉米",
+    "白糖",
+    "棉花",
+    "橡胶",
+    "PTA",
+    "PVC",
+}
+
+STOCK_KEYWORDS = {
+    "股票",
+    "证券",
+    "A股",
+    "港股",
+    "美股",
+    "股价",
+    "行情",
+    "财报",
+    "年报",
+    "季报",
+}
 
 
 def _fallback_system_message() -> str:
@@ -63,6 +114,23 @@ def _frontend_object_type(object_type: str) -> str:
     }.get(object_type or "", (object_type or "company").lower())
 
 
+def infer_object_type(object_name: str, object_type: str | None = None) -> str:
+    """Infer a supported research object type for "auto detect" task creation."""
+    normalized = normalize_object_type(object_type)
+    raw_type = str(object_type or "").strip()
+    is_auto_type = raw_type.lower() in AUTO_OBJECT_TYPE_VALUES
+    if normalized and not is_auto_type:
+        return normalized
+
+    name = str(object_name or "").strip()
+    upper_name = name.upper()
+    if STOCK_CODE_RE.match(name) or any(keyword in upper_name for keyword in STOCK_KEYWORDS):
+        return "STOCK"
+    if any(keyword.upper() in upper_name for keyword in PRODUCT_KEYWORDS):
+        return "PRODUCT"
+    return "COMPANY"
+
+
 def create_research_task(
     user_id: int,
     title: str,
@@ -78,10 +146,10 @@ def create_research_task(
     if not user:
         return (False, "用户不存在", None)
 
-    if not title or not object_name or not object_type:
-        return (False, "title/object_name/object_type 不能为空", None)
+    if not title or not object_name:
+        return (False, "title/object_name 不能为空", None)
 
-    normalized_object_type = normalize_object_type(object_type)
+    normalized_object_type = infer_object_type(object_name, object_type)
     if not normalized_object_type:
         return (False, "object_type 无效", None)
 
