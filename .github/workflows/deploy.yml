@@ -48,6 +48,7 @@ jobs:
   deploy:
     name: Build and deploy backend
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     environment: ${{ github.event.inputs.environment || 'production' }}
 
@@ -119,13 +120,63 @@ jobs:
             "${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}" \
             "DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' DEPLOY_REF='${DEPLOY_REF}' bash -s" <<'REMOTE_DEPLOY'
           set -euo pipefail
+          compose_project="${DEPLOY_COMPOSE_PROJECT:-$(basename "${DEPLOY_APP_DIR}")}"
+          worktree_dir="$(mktemp -d /tmp/8feet-backend-deploy.XXXXXX)"
+          rmdir "${worktree_dir}"
+          target_ref="${DEPLOY_REF}"
+          env_file_args=()
+
+          cleanup() {
+            cd /
+            git -C "${DEPLOY_APP_DIR}" worktree remove --force "${worktree_dir}" 2>/dev/null || rm -rf "${worktree_dir}"
+          }
+          trap cleanup EXIT
+
+          echo "[deploy] source directory: ${DEPLOY_APP_DIR}"
           cd "${DEPLOY_APP_DIR}"
-          git fetch --tags origin
-          git checkout "${DEPLOY_REF}"
-          if git show-ref --verify --quiet "refs/remotes/origin/${DEPLOY_REF}"; then
-            git pull --ff-only origin "${DEPLOY_REF}"
+          if [ -n "$(git status --short)" ]; then
+            echo "[deploy] existing local changes in deploy checkout:"
+            git status --short
           fi
-          docker compose up -d --build
-          docker compose ps
-          curl -fsS http://127.0.0.1:8000/readyz
+
+          echo "[deploy] fetching source"
+          git fetch --tags origin
+          if git show-ref --verify --quiet "refs/remotes/origin/${DEPLOY_REF}"; then
+            target_ref="origin/${DEPLOY_REF}"
+          elif git rev-parse --verify --quiet "${DEPLOY_REF}^{commit}" >/dev/null; then
+            target_ref="${DEPLOY_REF}"
+          else
+            echo "[deploy] ref not found: ${DEPLOY_REF}" >&2
+            exit 1
+          fi
+
+          echo "[deploy] preparing clean worktree for ${target_ref}"
+          git worktree add --force --detach "${worktree_dir}" "${target_ref}"
+
+          if [ -f "${DEPLOY_APP_DIR}/.env" ]; then
+            env_file_args=(--env-file "${DEPLOY_APP_DIR}/.env")
+          fi
+
+          cd "${worktree_dir}"
+
+          echo "[deploy] building backend image"
+          DOCKER_BUILDKIT=1 docker compose -p "${compose_project}" "${env_file_args[@]}" build --progress=plain backend
+
+          echo "[deploy] starting services"
+          docker compose -p "${compose_project}" "${env_file_args[@]}" up -d --remove-orphans
+          docker compose -p "${compose_project}" "${env_file_args[@]}" ps
+
+          echo "[deploy] waiting for readyz"
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/readyz; then
+              echo
+              echo "[deploy] readyz ok"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "[deploy] backend did not become ready; recent logs:"
+          docker compose -p "${compose_project}" "${env_file_args[@]}" logs --tail=200 backend celery-worker
+          exit 1
           REMOTE_DEPLOY

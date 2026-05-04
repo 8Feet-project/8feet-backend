@@ -65,6 +65,7 @@ services:
 
   celery-worker:
     image: 8feet-backend:latest
+    pull_policy: never
     restart: always
     depends_on:
       db:
