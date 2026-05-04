@@ -25,7 +25,7 @@ env:
   DJANGO_SECRET_KEY: ci-only-secret-key
   DJANGO_ALLOWED_HOSTS: 127.0.0.1,localhost
   DJANGO_CSRF_TRUSTED_ORIGINS: http://127.0.0.1,http://localhost
-  LOG_DIR: ${{ runner.temp }}/8feet-logs
+  LOG_DIR: /tmp/8feet-logs
   DB_HOST: 127.0.0.1
   DB_PORT: "5432"
   DB_USER: ci
@@ -41,7 +41,7 @@ env:
   S3_ADDRESS: 127.0.0.1:9000
   S3_BUCKET_REPORTS: eightfeet-reports
   S3_USE_SSL: "false"
-  STATIC_ROOT: ${{ runner.temp }}/8feet-static
+  STATIC_ROOT: /tmp/8feet-static
 
 jobs:
   test:
