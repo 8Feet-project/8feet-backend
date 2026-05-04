@@ -31,6 +31,7 @@ File: `.github/workflows/deploy.yml`
 
 Trigger:
 
+- Automatic `workflow_run` after `Backend CI` succeeds on `main`.
 - Manual `workflow_dispatch`
 
 Inputs:
@@ -39,6 +40,10 @@ Inputs:
 - `environment`: GitHub environment. `staging` or `production`.
 - `publish_image`: Build and push `ghcr.io/<owner>/8feet-backend`.
 - `deploy_ssh`: Deploy to the configured SSH host.
+
+Automatic deployments always deploy `main` to the `production` environment over
+SSH and skip GHCR publishing. Use the manual trigger when deploying another ref,
+deploying to `staging`, or publishing a GHCR image.
 
 Production deployments should be protected with GitHub Environment approvals.
 
@@ -60,6 +65,14 @@ repository, Docker, and Docker Compose. Runtime secrets such as
 should live in the server-side `.env` file used by `docker-compose.yml`.
 
 ## Deployment Flow
+
+Automatic production deployment:
+
+1. Push or merge to `main`.
+2. Wait for `Backend CI` to complete successfully.
+3. `Backend CD` starts automatically and deploys `main` to `production`.
+
+Manual deployment:
 
 1. Open GitHub Actions.
 2. Select `Backend CD`.
