@@ -38,9 +38,20 @@ from research.interface.research_runtime import (
     build_research_system_message,
     _resolve_max_turns,
 )
+from research.interface.research_interface import infer_object_type
 
 
 class ResearchRuntimeConstraintTests(SimpleTestCase):
+    def test_infer_object_type_keeps_explicit_selection(self):
+        self.assertEqual(infer_object_type("腾讯控股", "stock"), "STOCK")
+        self.assertEqual(infer_object_type("黄金", "company"), "COMPANY")
+
+    def test_infer_object_type_handles_auto_detect_values(self):
+        self.assertEqual(infer_object_type("600519", ""), "STOCK")
+        self.assertEqual(infer_object_type("AAPL", "auto"), "STOCK")
+        self.assertEqual(infer_object_type("黄金期货", "自动识别"), "PRODUCT")
+        self.assertEqual(infer_object_type("腾讯控股", None), "COMPANY")
+
     def test_standard_research_uses_default_turn_budget(self):
         self.assertEqual(_resolve_max_turns({}), 10)
 

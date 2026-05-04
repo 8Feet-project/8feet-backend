@@ -124,9 +124,10 @@ def create_task(request: HttpRequest):
             message,
         )
 
+    task = ResearchTask.objects.filter(pk=task_id, user_id=request.user.id).first()
     return success_api_response({
         "task_id": str(task_id),
-        "detected_object_type": object_type,
+        "detected_object_type": _frontend_object_type(task.object_type if task else object_type),
         "status": "pending",
         "next_action": "poll_status",
     })
