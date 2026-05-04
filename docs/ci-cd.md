@@ -15,7 +15,7 @@ Triggers:
 
 Stages:
 
-- Install Python 3.12 dependencies with `uv sync --frozen`
+- Install Python 3.12 dependencies with `uv sync`
 - Run Django system checks
 - Run backend tests:
   - `research.tests`

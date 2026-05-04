@@ -29,11 +29,3 @@ dependencies = [
     "python-docx",
     "reportlab",
 ]
-
-[project.optional-dependencies]
-research = [
-    "efeet",
-]
-
-[tool.uv.sources]
-efeet = { path = "./efeet", editable = true }
