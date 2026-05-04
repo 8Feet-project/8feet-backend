@@ -35,7 +35,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/8feet-backend
+  IMAGE_NAME: ghcr.io/8feet-project/8feet-backend
 
 jobs:
   deploy:
