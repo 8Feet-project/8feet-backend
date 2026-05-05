@@ -57,7 +57,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref || 'main' }}
-          submodules: recursive
+
+      - name: Check out efeet submodule
+        env:
+          EFEET_REPO_TOKEN: ${{ secrets.EFEET_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${EFEET_REPO_TOKEN}"
+          git config --global url."https://x-access-token:${EFEET_REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git submodule sync -- efeet
+          git submodule update --init --force --depth=1 efeet
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
