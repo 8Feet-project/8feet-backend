@@ -10,8 +10,6 @@ requires-python = ">=3.12"
 dependencies = [
     "Django",
     "psycopg2-binary",
-    "pylint",
-    "pylint-django",
     "pillow",
     "requests",
     "pandas",
@@ -20,6 +18,7 @@ dependencies = [
     "PyYAML",
     "minio",
     "django-cors-headers",
+    "efeet",
     "langchain-core",
     "python-dotenv",
     "channels",
@@ -29,3 +28,12 @@ dependencies = [
     "python-docx",
     "reportlab",
 ]
+
+[dependency-groups]
+dev = [
+    "pylint",
+    "pylint-django",
+]
+
+[tool.uv.sources]
+efeet = { path = "./efeet", editable = true }

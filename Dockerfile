@@ -11,12 +11,17 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir uv
 
-COPY pyproject.toml README.md ./
-RUN uv sync --no-dev
+COPY pyproject.toml uv.lock README.md ./
+COPY efeet ./efeet
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --no-install-project
 
 COPY src ./src
 COPY scripts/docker/entrypoint.sh ./scripts/docker/entrypoint.sh
 COPY config.example.yaml ./config.example.yaml
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev
 
 RUN chmod +x ./scripts/docker/entrypoint.sh
 

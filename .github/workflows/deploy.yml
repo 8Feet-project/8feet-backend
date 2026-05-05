@@ -23,9 +23,9 @@ on:
           - staging
           - production
       publish_image:
-        description: Build and push image to GHCR
+        description: Build and push image to GHCR before deploy
         required: true
-        default: true
+        default: false
         type: boolean
       deploy_ssh:
         description: Deploy on the configured SSH host
@@ -86,6 +86,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Resolve deploy image
+        id: deploy_image
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.publish_image }}" = "true" ]; then
+            echo "ref=${IMAGE_NAME}:${{ steps.version.outputs.sha_short }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${IMAGE_NAME}:${{ github.event.inputs.environment || 'production' }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Configure SSH
         if: ${{ github.event_name == 'workflow_run' || github.event.inputs.deploy_ssh == 'true' }}
         env:
@@ -110,20 +120,23 @@ jobs:
           DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
           DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR }}
           DEPLOY_REF: ${{ github.event.inputs.ref || 'main' }}
+          DEPLOY_IMAGE: ${{ steps.deploy_image.outputs.ref }}
         run: |
           set -euo pipefail
           test -n "${DEPLOY_SSH_HOST}"
           test -n "${DEPLOY_SSH_USER}"
           test -n "${DEPLOY_APP_DIR}"
+          test -n "${DEPLOY_IMAGE}"
           ssh -i ~/.ssh/8feet_deploy_key \
             -p "${DEPLOY_SSH_PORT:-22}" \
             "${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}" \
-            "DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' DEPLOY_REF='${DEPLOY_REF}' bash -s" <<'REMOTE_DEPLOY'
+            "DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' DEPLOY_REF='${DEPLOY_REF}' DEPLOY_IMAGE='${DEPLOY_IMAGE}' bash -s" <<'REMOTE_DEPLOY'
           set -euo pipefail
           compose_project="${DEPLOY_COMPOSE_PROJECT:-$(basename "${DEPLOY_APP_DIR}")}"
           worktree_dir="$(mktemp -d /tmp/8feet-backend-deploy.XXXXXX)"
           rmdir "${worktree_dir}"
           target_ref="${DEPLOY_REF}"
+          deploy_image="${DEPLOY_IMAGE}"
           env_file_args=()
 
           cleanup() {
@@ -159,12 +172,12 @@ jobs:
 
           cd "${worktree_dir}"
 
-          echo "[deploy] building backend image"
-          DOCKER_BUILDKIT=1 docker compose -p "${compose_project}" "${env_file_args[@]}" build --progress=plain backend
+          echo "[deploy] pulling backend image ${deploy_image}"
+          BACKEND_IMAGE="${deploy_image}" docker compose -p "${compose_project}" "${env_file_args[@]}" pull backend celery-worker
 
           echo "[deploy] starting services"
-          docker compose -p "${compose_project}" "${env_file_args[@]}" up -d --remove-orphans
-          docker compose -p "${compose_project}" "${env_file_args[@]}" ps
+          BACKEND_IMAGE="${deploy_image}" docker compose -p "${compose_project}" "${env_file_args[@]}" up -d --remove-orphans
+          BACKEND_IMAGE="${deploy_image}" docker compose -p "${compose_project}" "${env_file_args[@]}" ps
 
           echo "[deploy] waiting for readyz"
           for attempt in $(seq 1 30); do
@@ -177,6 +190,6 @@ jobs:
           done
 
           echo "[deploy] backend did not become ready; recent logs:"
-          docker compose -p "${compose_project}" "${env_file_args[@]}" logs --tail=200 backend celery-worker
+          BACKEND_IMAGE="${deploy_image}" docker compose -p "${compose_project}" "${env_file_args[@]}" logs --tail=200 backend celery-worker
           exit 1
           REMOTE_DEPLOY

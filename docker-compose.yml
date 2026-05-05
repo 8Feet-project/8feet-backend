@@ -1,9 +1,7 @@
 services:
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: 8feet-backend:latest
+    image: ${BACKEND_IMAGE:-ghcr.io/8feet-project/8feet-backend:production}
+    pull_policy: always
     restart: always
     depends_on:
       db:
@@ -64,8 +62,8 @@ services:
       retries: 5
 
   celery-worker:
-    image: 8feet-backend:latest
-    pull_policy: never
+    image: ${BACKEND_IMAGE:-ghcr.io/8feet-project/8feet-backend:production}
+    pull_policy: always
     restart: always
     depends_on:
       db:
