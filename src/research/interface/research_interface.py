@@ -2,11 +2,15 @@
 调研任务业务逻辑 — interface 层
 当前阶段仅建骨架，具体的 DeepSearch 爬虫/向量检索逻辑后续由其他人员迭代。
 """
-from typing import Tuple, Optional, List
+from typing import List, Optional, Tuple
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
+from django.utils import timezone
 
 from research.models.research_task import (
+    DISPATCH_CANCELLED,
+    DISPATCH_PENDING,
     OBJECT_TYPE_COMPANY,
     OBJECT_TYPE_PRODUCT,
     OBJECT_TYPE_STOCK,
@@ -20,6 +24,7 @@ from research.models.research_task import (
     STATUS_WAITING_USER,
 )
 from research.models.task_step_log import TaskStepLog
+from research.task_runner import ResearchTaskRunner, append_task_log
 
 
 def create_research_task(
@@ -27,12 +32,7 @@ def create_research_task(
     object_type: str, llm_config_id: int = None,
     search_params: dict = None
 ) -> Tuple[bool, Optional[str], Optional[int]]:
-    """创建调研任务
-
-    FR-JSDY-0001: 用户发起调研任务
-    Returns:
-        (成功与否, 错误消息, task_id)
-    """
+    """创建调研任务"""
     User = get_user_model()
     user = User.objects.filter(pk=user_id).first()
     if not user:
@@ -41,31 +41,32 @@ def create_research_task(
     if not title or not object_name or not object_type:
         return (False, "title/object_name/object_type 不能为空", None)
 
-    task = ResearchTask.objects.create(
-        user=user,
-        title=title,
-        object_name=object_name,
-        object_type=object_type,
-        llm_config_id=llm_config_id,
-        search_params=search_params or {},
-        status=STATUS_PENDING,
-        progress={"searching": 0, "analyzing": 0, "report": 0},
-    )
+    with transaction.atomic():
+        task = ResearchTask.objects.create(
+            user=user,
+            title=title,
+            object_name=object_name,
+            object_type=object_type,
+            llm_config_id=llm_config_id,
+            search_params=search_params or {},
+            status=STATUS_PENDING,
+            dispatch_status=DISPATCH_PENDING,
+            progress={"searching": 0, "analyzing": 0, "report": 0},
+            retry_count=0,
+        )
+        append_task_log(
+            task,
+            "任务已创建",
+            "COMPLETED",
+            step_code='task_created',
+            detail={"message": f"调研任务 [{title}] 创建成功，等待后台调度"},
+        )
+        transaction.on_commit(lambda: ResearchTaskRunner.enqueue(task.id))
 
-    # 记录首条步骤日志
-    TaskStepLog.objects.create(
-        task=task,
-        step_name="任务已创建",
-        step_status="COMPLETED",
-        detail={"message": f"调研任务 [{title}] 创建成功，等待 DeepSearch 检索"}
-    )
-
-    # TODO: 后续迭代 — 触发异步 DeepSearch 任务（Celery Task）
     return (True, None, task.id)
 
 
 def get_task_detail(task_id: int) -> Optional[dict]:
-    """获取调研任务详情"""
     task = ResearchTask.objects.filter(pk=task_id).first()
     if not task:
         return None
@@ -76,9 +77,16 @@ def get_task_detail(task_id: int) -> Optional[dict]:
         "object_name": task.object_name,
         "object_type": task.object_type,
         "status": task.status,
+        "dispatch_status": task.dispatch_status,
+        "runner_token": task.runner_token,
         "progress": task.progress,
         "search_params": task.search_params,
         "llm_config_id": task.llm_config_id,
+        "queued_at": task.queued_at.isoformat() if task.queued_at else None,
+        "started_at": task.started_at.isoformat() if task.started_at else None,
+        "finished_at": task.finished_at.isoformat() if task.finished_at else None,
+        "last_error": task.last_error,
+        "retry_count": task.retry_count,
         "created_at": task.created_at.isoformat(),
         "updated_at": task.updated_at.isoformat(),
     }
@@ -96,7 +104,6 @@ def _map_object_type(object_type: Optional[str]) -> str:
     return mapping.get(object_type or '', 'company')
 
 
-
 def _map_task_status(status: Optional[str]) -> str:
     mapping = {
         STATUS_PENDING: 'pending',
@@ -111,7 +118,6 @@ def _map_task_status(status: Optional[str]) -> str:
     return mapping.get(status or '', 'pending')
 
 
-
 def _map_step_status(step_status: Optional[str], is_interactive: bool = False) -> str:
     mapping = {
         'RUNNING': 'running',
@@ -121,7 +127,6 @@ def _map_step_status(step_status: Optional[str], is_interactive: bool = False) -
         'SKIPPED': 'skipped',
     }
     return mapping.get(step_status or '', 'pending')
-
 
 
 def _build_node_metrics(detail: Optional[dict]) -> List[dict]:
@@ -139,9 +144,10 @@ def _build_node_metrics(detail: Optional[dict]) -> List[dict]:
     return metrics
 
 
-
 def _serialize_step_log(log: TaskStepLog) -> dict:
     detail = log.detail if isinstance(log.detail, dict) else {}
+    started_at = log.started_at or log.created_at
+    updated_at = log.finished_at or started_at
     return {
         'node_id': str(log.id),
         'node_name': log.step_name,
@@ -149,22 +155,20 @@ def _serialize_step_log(log: TaskStepLog) -> dict:
         'node_status': _map_step_status(log.step_status, log.is_interactive),
         'description': detail.get('message') or detail.get('description', ''),
         'summary': detail.get('summary') or detail.get('message', ''),
-        'started_at': log.created_at.isoformat(),
-        'finished_at': detail.get('finished_at'),
-        'updated_at': detail.get('updated_at', log.created_at.isoformat()),
+        'started_at': started_at.isoformat(),
+        'finished_at': log.finished_at.isoformat() if log.finished_at else detail.get('finished_at'),
+        'updated_at': detail.get('updated_at', updated_at.isoformat()),
         'duration_ms': detail.get('duration_ms'),
         'can_intervene': log.is_interactive and log.step_status == 'PAUSED',
         'intervention_id': str(log.id) if log.is_interactive else None,
         'metrics': _build_node_metrics(detail),
+        'error_message': log.error_message,
+        'step_code': log.step_code,
+        'sequence': log.sequence,
     }
 
 
-
 def list_user_tasks(user_id: int) -> List[dict]:
-    """获取用户的所有调研任务列表
-
-    FR-GRXX-0001: 历史调研记录管理
-    """
     tasks = ResearchTask.objects.filter(user_id=user_id).order_by('-created_at')
     return [
         {
@@ -172,6 +176,7 @@ def list_user_tasks(user_id: int) -> List[dict]:
             'object_name': task.object_name,
             'object_type': _map_object_type(task.object_type),
             'status': _map_task_status(task.status),
+            'dispatch_status': task.dispatch_status.lower(),
             'created_at': task.created_at.isoformat(),
         }
         for task in tasks
@@ -179,31 +184,29 @@ def list_user_tasks(user_id: int) -> List[dict]:
 
 
 def cancel_task(task_id: int, user_id: int) -> Tuple[bool, Optional[str]]:
-    """取消调研任务"""
     task = ResearchTask.objects.filter(pk=task_id, user_id=user_id).first()
     if not task:
         return (False, "任务不存在或无权操作")
-    if task.status in (STATUS_CANCELLED, 'COMPLETED'):
+    if task.status in (STATUS_CANCELLED, STATUS_COMPLETED):
         return (False, "任务已完成或已取消")
 
     task.status = STATUS_CANCELLED
-    task.save()
+    task.dispatch_status = DISPATCH_CANCELLED
+    task.finished_at = task.finished_at or timezone.now()
+    task.save(update_fields=['status', 'dispatch_status', 'finished_at', 'updated_at'])
 
-    TaskStepLog.objects.create(
-        task=task,
-        step_name="任务已取消",
-        step_status="COMPLETED",
-        detail={"message": "用户手动取消了调研任务"}
+    append_task_log(
+        task,
+        "任务已取消",
+        "COMPLETED",
+        step_code='task_cancelled',
+        detail={"message": "用户手动取消了调研任务"},
     )
     return (True, None)
 
 
 def get_task_step_logs(task_id: int) -> dict:
-    """获取任务步骤日志（全流程监控）
-
-    FR-JSDY-0003: 全流程可视化监控
-    """
-    logs = TaskStepLog.objects.filter(task_id=task_id).order_by('created_at')
+    logs = TaskStepLog.objects.filter(task_id=task_id).order_by('sequence', 'created_at')
     nodes = [_serialize_step_log(log) for log in logs]
     edges = [
         {'from': nodes[index]['node_id'], 'to': nodes[index + 1]['node_id']}
@@ -226,9 +229,8 @@ def get_task_step_logs(task_id: int) -> dict:
     }
 
 
-
 def get_task_events(task_id: int) -> List[dict]:
-    logs = TaskStepLog.objects.filter(task_id=task_id).order_by('created_at')
+    logs = TaskStepLog.objects.filter(task_id=task_id).order_by('sequence', 'created_at')
     events = []
     for log in logs:
         detail = log.detail if isinstance(log.detail, dict) else {}
@@ -243,10 +245,10 @@ def get_task_events(task_id: int) -> List[dict]:
             'title': detail.get('event_title', log.step_name),
             'message': detail.get('message', ''),
             'metrics': detail.get('metrics', {}),
-            'timestamp': log.created_at.isoformat(),
+            'timestamp': (log.finished_at or log.started_at or log.created_at).isoformat(),
+            'error_message': log.error_message,
         })
     return events
-
 
 
 def get_task_status_view(task_id: int) -> Optional[dict]:
@@ -254,7 +256,7 @@ def get_task_status_view(task_id: int) -> Optional[dict]:
     if not task:
         return None
 
-    logs = TaskStepLog.objects.filter(task_id=task_id).order_by('created_at')
+    logs = TaskStepLog.objects.filter(task_id=task_id).order_by('sequence', 'created_at')
     current_log = next(
         (log for log in logs if _map_step_status(log.step_status, log.is_interactive) in ('running', 'waiting_user')),
         logs.last() if logs else None,
@@ -266,6 +268,7 @@ def get_task_status_view(task_id: int) -> Optional[dict]:
     return {
         'task_id': str(task.id),
         'status': _map_task_status(task.status),
+        'dispatch_status': task.dispatch_status.lower(),
         'current_stage': current_log.step_name if current_log else '任务初始化',
         'progress': progress,
         'hint': current_detail.get('message', '任务正在处理中'),
@@ -276,8 +279,11 @@ def get_task_status_view(task_id: int) -> Optional[dict]:
         'waiting_intervention': task.status == STATUS_WAITING_USER,
         'metrics_summary': _build_node_metrics(current_detail),
         'available_actions': ['cancel'] if task.status not in (STATUS_COMPLETED, STATUS_CANCELLED) else ['view_report'],
+        'queued_at': task.queued_at.isoformat() if task.queued_at else None,
+        'started_at': task.started_at.isoformat() if task.started_at else None,
+        'finished_at': task.finished_at.isoformat() if task.finished_at else None,
+        'last_error': task.last_error,
     }
-
 
 
 def get_task_intervention_detail(task_id: int, user_id: int, node_id: str) -> Optional[dict]:
@@ -304,7 +310,6 @@ def get_task_intervention_detail(task_id: int, user_id: int, node_id: str) -> Op
 
 
 def pause_research_task(task_id: int, step_name: str, detail: dict) -> Tuple[bool, Optional[str]]:
-    """Agent 请求暂停以等待用户介入"""
     task = ResearchTask.objects.filter(pk=task_id).first()
     if not task:
         return (False, "任务不存在")
@@ -314,19 +319,19 @@ def pause_research_task(task_id: int, step_name: str, detail: dict) -> Tuple[boo
     task.status = STATUS_WAITING_USER
     task.save(update_fields=['status', 'updated_at'])
 
-    TaskStepLog.objects.create(
-        task=task,
-        step_name=step_name,
-        step_status='PAUSED',
+    append_task_log(
+        task,
+        step_name,
+        'PAUSED',
+        step_code='task_paused',
         detail=detail,
-        is_interactive=True
+        is_interactive=True,
     )
     return (True, None)
 
 
 def respond_to_step(task_id: int, user_id: int, node_id: str, action: str,
                     response_data: dict = None) -> Tuple[bool, Optional[str], Optional[dict]]:
-    """用户提供反馈，继续或终止任务"""
     task = ResearchTask.objects.filter(pk=task_id, user_id=user_id).first()
     if not task:
         return (False, "任务不存在或无权操作", None)
@@ -350,15 +355,18 @@ def respond_to_step(task_id: int, user_id: int, node_id: str, action: str,
         'data': response_data or {}
     }
     step.step_status = 'COMPLETED' if normalized_action != 'SKIP' else 'SKIPPED'
-    step.save(update_fields=['user_response', 'step_status'])
+    step.finished_at = step.finished_at or step.started_at
+    step.save(update_fields=['user_response', 'step_status', 'finished_at'])
 
     if normalized_action == 'CANCEL':
         task.status = STATUS_CANCELLED
-        task.save(update_fields=['status', 'updated_at'])
-        TaskStepLog.objects.create(
-            task=task,
-            step_name='任务中止',
-            step_status='COMPLETED',
+        task.dispatch_status = DISPATCH_CANCELLED
+        task.save(update_fields=['status', 'dispatch_status', 'updated_at'])
+        append_task_log(
+            task,
+            '任务中止',
+            'COMPLETED',
+            step_code='task_aborted',
             detail={'message': '用户在介入时选择中止任务'}
         )
         return (True, None, {
@@ -376,10 +384,11 @@ def respond_to_step(task_id: int, user_id: int, node_id: str, action: str,
 
     task.status = resume_status
     task.save(update_fields=['status', 'updated_at'])
-    TaskStepLog.objects.create(
-        task=task,
-        step_name='恢复运行',
-        step_status='RUNNING',
+    append_task_log(
+        task,
+        '恢复运行',
+        'RUNNING',
+        step_code='task_resumed',
         detail={
             'message': '接收到用户反馈，任务继续执行',
             'action': normalized_action,
@@ -396,3 +405,7 @@ def respond_to_step(task_id: int, user_id: int, node_id: str, action: str,
         'task_status': _map_task_status(task.status),
         'node_status': 'completed' if normalized_action != 'SKIP' else 'skipped',
     })
+
+
+def recover_research_tasks() -> int:
+    return ResearchTaskRunner.recover_incomplete_tasks()

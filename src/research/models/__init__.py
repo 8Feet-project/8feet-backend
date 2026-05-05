@@ -2,8 +2,21 @@
 research 模型模块
 """
 from .research_task import (
-    ResearchTask, STATUS_PENDING, STATUS_SEARCHING,
-    STATUS_ANALYZING, STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED
+    DISPATCH_CANCELLED,
+    DISPATCH_FAILED,
+    DISPATCH_FINISHED,
+    DISPATCH_PENDING,
+    DISPATCH_QUEUED,
+    DISPATCH_RUNNING,
+    DISPATCH_STARTING,
+    ResearchTask,
+    STATUS_ANALYZING,
+    STATUS_CANCELLED,
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_PENDING,
+    STATUS_SEARCHING,
+    STATUS_WAITING_USER,
 )
 from .scraped_content import ScrapedContent
 from .analysis_result import AnalysisResult
