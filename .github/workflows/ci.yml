@@ -48,7 +48,7 @@ env:
 jobs:
   test:
     name: Django checks and tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
@@ -99,7 +99,7 @@ jobs:
 
   docker-build:
     name: Docker build and publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: test
 
     steps:
