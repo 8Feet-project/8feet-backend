@@ -141,6 +141,8 @@ jobs:
           rmdir "${worktree_dir}"
           target_ref="${DEPLOY_REF}"
           deploy_image="${DEPLOY_IMAGE}"
+          compose_file="${worktree_dir}/docker-compose.yml"
+          compose_args=( -p "${compose_project}" --project-directory "${DEPLOY_APP_DIR}" -f "${compose_file}" )
           env_file_args=()
 
           cleanup() {
@@ -180,12 +182,18 @@ jobs:
           echo "[deploy] logging into ghcr.io"
           printf '%s\n' "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
 
-          echo "[deploy] pulling backend image ${deploy_image}"
-          BACKEND_IMAGE="${deploy_image}" docker compose -p "${compose_project}" "${env_file_args[@]}" pull backend celery-worker
+          echo "[deploy] removing stale compose backup containers"
+          stale_containers="$(docker ps -a --format '{{.Names}}' | grep -E "^[0-9a-f]{12}_${compose_project}-" || true)"
+          if [ -n "${stale_containers}" ]; then
+            echo "${stale_containers}" | xargs -r docker rm -f
+          fi
 
-          echo "[deploy] starting services"
-          BACKEND_IMAGE="${deploy_image}" docker compose -p "${compose_project}" "${env_file_args[@]}" up -d --remove-orphans
-          BACKEND_IMAGE="${deploy_image}" docker compose -p "${compose_project}" "${env_file_args[@]}" ps
+          echo "[deploy] pulling backend image ${deploy_image}"
+          BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" pull backend celery-worker
+
+          echo "[deploy] updating application services"
+          BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" up -d --no-deps --remove-orphans backend celery-worker
+          BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" ps
 
           echo "[deploy] waiting for readyz"
           for attempt in $(seq 1 30); do
@@ -198,6 +206,6 @@ jobs:
           done
 
           echo "[deploy] backend did not become ready; recent logs:"
-          BACKEND_IMAGE="${deploy_image}" docker compose -p "${compose_project}" "${env_file_args[@]}" logs --tail=200 backend celery-worker
+          BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" logs --tail=200 backend celery-worker
           exit 1
           REMOTE_DEPLOY
