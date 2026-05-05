@@ -18,7 +18,6 @@ dependencies = [
     "PyYAML",
     "minio",
     "django-cors-headers",
-    "efeet",
     "langchain-core",
     "python-dotenv",
     "channels",
@@ -34,6 +33,3 @@ dev = [
     "pylint",
     "pylint-django",
 ]
-
-[tool.uv.sources]
-efeet = { path = "./efeet", editable = true }
