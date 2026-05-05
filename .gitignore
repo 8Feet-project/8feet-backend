@@ -4,9 +4,6 @@ venv/
 ENV/
 env/
 
-# uv
-uv.lock
-
 # Python
 __pycache__/
 *.py[cod]

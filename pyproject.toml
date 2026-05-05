@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "efeet",
     "Django",
     "psycopg2-binary",
     "pillow",
@@ -33,3 +34,6 @@ dev = [
     "pylint",
     "pylint-django",
 ]
+
+[tool.uv.sources]
+efeet = { path = "efeet" }
