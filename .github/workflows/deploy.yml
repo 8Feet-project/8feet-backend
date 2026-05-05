@@ -182,6 +182,12 @@ jobs:
           echo "[deploy] logging into ghcr.io"
           printf '%s\n' "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
 
+          echo "[deploy] stopping legacy host service if present"
+          if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl stop 8feet.service 2>/dev/null || true
+            sudo systemctl stop 8feet-backend.service 2>/dev/null || true
+          fi
+
           echo "[deploy] removing stale compose backup containers"
           stale_containers="$(docker ps -a --format '{{.Names}}' | grep -E "^[0-9a-f]{12}_${compose_project}-" || true)"
           if [ -n "${stale_containers}" ]; then
