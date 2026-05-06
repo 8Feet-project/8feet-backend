@@ -34,6 +34,14 @@ OBJECT_TYPE_ALIASES = {
 }
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def normalize_object_type(value: str | None) -> str:
     text = str(value or "").strip()
     if not text:
