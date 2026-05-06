@@ -7,6 +7,7 @@ import json
 from django.http import HttpRequest
 from django.views.decorators.http import require_GET, require_POST
 
+from research.models.scraped_content import ScrapedContent
 from shared.utils import (
     ErrorCode, failed_api_response, response_wrapper,
     success_api_response, jwt_auth
@@ -205,12 +206,23 @@ def report_citation_detail(request: HttpRequest, report_id: int, citation_id: in
     citation = Citation.objects.filter(pk=citation_id, report_id=report_id).first()
     if not citation:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "引用不存在")
+
+    scraped_content = (
+        ScrapedContent.objects
+        .filter(task_id=citation.report.task_id, source_url=citation.source_url)
+        .order_by('-relevance_score', '-scraped_at', '-id')
+        .first()
+    )
     return success_api_response({
         **_serialize_citation(citation),
         "report_id": str(report_id),
         "excerpt": citation.cited_text_snippet or "",
-        "published_at": "",
-        "source_type": "",
+        "published_at": (
+            scraped_content.scraped_at.isoformat()
+            if scraped_content and scraped_content.scraped_at
+            else ""
+        ),
+        "source_type": scraped_content.source_type if scraped_content else "",
     })
 
 
