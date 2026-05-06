@@ -248,6 +248,10 @@ SECURE_SSL_REDIRECT = _to_bool(
     _env('SECURE_SSL_REDIRECT', _YAML_CONFIG.get('SecureSSLRedirect', not DEBUG)),
     not DEBUG,
 )
+SECURE_REDIRECT_EXEMPT = [
+    r'^healthz$',
+    r'^readyz$',
+]
 SECURE_HSTS_SECONDS = _to_int(
     _env('SECURE_HSTS_SECONDS', _YAML_CONFIG.get('SecureHstsSeconds', 31536000 if not DEBUG else 0)),
     31536000 if not DEBUG else 0,

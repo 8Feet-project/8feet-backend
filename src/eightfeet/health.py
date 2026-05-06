@@ -3,12 +3,12 @@ import socket
 from django.conf import settings
 from django.core.cache import cache
 from django.db import connection
+from django.http import JsonResponse
 from django.utils import timezone
 
 from shared.utils import (
     ErrorCode,
     failed_api_response,
-    response_wrapper,
     success_api_response,
 )
 
@@ -41,18 +41,19 @@ def _check_minio():
         return False
 
 
-@response_wrapper
 def healthz(_request):
-    return success_api_response(
-        {
-            'status': 'ok',
-            'service': '8feet-backend',
-            'timestamp': timezone.now().isoformat(),
-        }
+    return JsonResponse(
+        success_api_response(
+            {
+                'status': 'ok',
+                'service': '8feet-backend',
+                'timestamp': timezone.now().isoformat(),
+            }
+        ),
+        status=200,
     )
 
 
-@response_wrapper
 def readyz(_request):
     checks = {
         'database': _check_db(),
@@ -66,9 +67,12 @@ def readyz(_request):
         'timestamp': timezone.now().isoformat(),
     }
     if is_ready:
-        return success_api_response(payload)
-    return failed_api_response(
-        ErrorCode.SERVICE_UNAVAILABLE,
-        'not_ready',
-        data=payload,
+        return JsonResponse(success_api_response(payload), status=200)
+    return JsonResponse(
+        failed_api_response(
+            ErrorCode.SERVICE_UNAVAILABLE,
+            'not_ready',
+            data=payload,
+        ),
+        status=503,
     )
