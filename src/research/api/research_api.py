@@ -51,6 +51,105 @@ def _task_progress_percent(task: ResearchTask) -> int:
     return int(sum(values) / len(values))
 
 
+_STAGE_TEMPLATE = [
+    {"key": "ingest", "label": "任务接收", "weight": 10},
+    {"key": "retrieval", "label": "数据检索", "weight": 35},
+    {"key": "analysis", "label": "结构化分析", "weight": 35},
+    {"key": "report", "label": "报告生成", "weight": 20},
+]
+
+
+def _progress_model(task: ResearchTask) -> dict[str, Any]:
+    progress = task.progress or {}
+    current_status = _frontend_status(task.status)
+    current_stage = str(progress.get("stage", task.status) or task.status).lower()
+
+    searching_progress = int(progress.get("searching", 0) or 0)
+    analyzing_progress = int(progress.get("analyzing", 0) or 0)
+    report_progress = int(progress.get("report", 0) or 0)
+
+    def stage_payload(key: str, label: str, weight: int, status: str, stage_progress: int) -> dict[str, Any]:
+        bounded_progress = max(0, min(100, int(stage_progress)))
+        return {
+            "key": key,
+            "label": label,
+            "weight": weight,
+            "status": status,
+            "progress_percent": bounded_progress,
+        }
+
+    if current_status == "completed":
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "completed", 100),
+            stage_payload("retrieval", "数据检索", 35, "completed", 100),
+            stage_payload("analysis", "结构化分析", 35, "completed", 100),
+            stage_payload("report", "报告生成", 20, "completed", 100),
+        ]
+    elif current_status == "cancelled":
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "completed", 100),
+            stage_payload("retrieval", "数据检索", 35, "failed", max(searching_progress, 70)),
+            stage_payload("analysis", "结构化分析", 35, "pending", 0),
+            stage_payload("report", "报告生成", 20, "pending", 0),
+        ]
+    elif current_status == "failed":
+        if current_stage == "searching":
+            stages = [
+                stage_payload("ingest", "任务接收", 10, "completed", 100),
+                stage_payload("retrieval", "数据检索", 35, "failed", max(searching_progress, 70)),
+                stage_payload("analysis", "结构化分析", 35, "pending", 0),
+                stage_payload("report", "报告生成", 20, "pending", 0),
+            ]
+        else:
+            stages = [
+                stage_payload("ingest", "任务接收", 10, "completed", 100),
+                stage_payload("retrieval", "数据检索", 35, "completed", max(searching_progress, 100)),
+                stage_payload("analysis", "结构化分析", 35, "failed", max(analyzing_progress, 70)),
+                stage_payload("report", "报告生成", 20, "pending", 0),
+            ]
+    elif current_status == "waiting_user":
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "completed", 100),
+            stage_payload("retrieval", "数据检索", 35, "completed", max(searching_progress, 100)),
+            stage_payload("analysis", "结构化分析", 35, "waiting_user", max(analyzing_progress, 85)),
+            stage_payload("report", "报告生成", 20, "pending", 0),
+        ]
+    elif current_status == "analyzing":
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "completed", 100),
+            stage_payload("retrieval", "数据检索", 35, "completed", max(searching_progress, 100)),
+            stage_payload("analysis", "结构化分析", 35, "running", max(analyzing_progress, 60)),
+            stage_payload("report", "报告生成", 20, "running" if report_progress > 0 else "pending", max(report_progress, 0)),
+        ]
+    elif current_status == "searching":
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "completed", 100),
+            stage_payload("retrieval", "数据检索", 35, "running", max(searching_progress, 20)),
+            stage_payload("analysis", "结构化分析", 35, "pending", 0),
+            stage_payload("report", "报告生成", 20, "pending", 0),
+        ]
+    else:
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "running" if current_status == "pending" else "completed", 10 if current_status == "pending" else 100),
+            stage_payload("retrieval", "数据检索", 35, "pending", 0),
+            stage_payload("analysis", "结构化分析", 35, "pending", 0),
+            stage_payload("report", "报告生成", 20, "pending", 0),
+        ]
+
+    total_weight = sum(stage["weight"] for stage in stages)
+    completed_weight = sum(stage["weight"] * stage["progress_percent"] / 100 for stage in stages)
+    percent = 0 if total_weight <= 0 else round((completed_weight / total_weight) * 100)
+    current_stage_index = next((index for index, stage in enumerate(stages) if stage["status"] not in {"completed", "skipped"}), len(stages) - 1)
+
+    return {
+        "total_weight": total_weight,
+        "completed_weight": round(completed_weight, 2),
+        "percent": percent,
+        "current_stage_index": current_stage_index,
+        "stages": stages,
+    }
+
+
 def _serialize_history_task(task: ResearchTask) -> dict:
     report = task.reports.filter(is_latest=True).first()
     return {
@@ -268,11 +367,13 @@ def task_status(request: HttpRequest, task_id: int):
     if not task:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
     progress = _task_progress_percent(task)
+    progress_model = _progress_model(task)
     return success_api_response({
         "task_id": str(task.id),
         "status": _frontend_status(task.status),
         "current_stage": (task.progress or {}).get("stage", task.status),
-        "progress": progress,
+        "progress": progress_model["percent"] if isinstance(progress_model.get("percent"), int) else progress,
+        "progress_model": progress_model,
         "hint": "任务已完成" if task.status == "COMPLETED" else "任务处理中",
         "object_name": task.object_name,
         "object_type": _frontend_object_type(task.object_type),
