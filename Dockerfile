@@ -3,6 +3,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app/src" \
     DJANGO_SETTINGS_MODULE="eightfeet.settings"
@@ -53,7 +54,8 @@ COPY config.example.yaml ./config.example.yaml
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev \
-    && ./.venv/bin/python -m playwright install chromium
+    && ./.venv/bin/python -m playwright install chromium \
+    && test -x /ms-playwright/chromium-*/chrome-linux/chrome || test -x /ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell
 
 RUN chmod +x ./scripts/docker/entrypoint.sh
 
