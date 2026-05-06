@@ -3,6 +3,7 @@
 映射需求: FR-JSDY-0001 ~ FR-JSDY-0006
 """
 import json
+from typing import Any
 
 from django.http import HttpRequest
 from django.views.decorators.http import require_GET, require_POST
@@ -26,6 +27,7 @@ from research.interface.cross_validation_runtime import (
     get_cross_validation_payload,
 )
 from research.models import ResearchTask, ScrapedContent, TaskStepLog
+from research.interface.thread_codec import content_to_text
 
 
 def _frontend_status(status: str) -> str:
@@ -47,6 +49,105 @@ def _task_progress_percent(task: ResearchTask) -> int:
     if not values:
         return 100 if task.status == "COMPLETED" else 0
     return int(sum(values) / len(values))
+
+
+_STAGE_TEMPLATE = [
+    {"key": "ingest", "label": "任务接收", "weight": 10},
+    {"key": "retrieval", "label": "数据检索", "weight": 35},
+    {"key": "analysis", "label": "结构化分析", "weight": 35},
+    {"key": "report", "label": "报告生成", "weight": 20},
+]
+
+
+def _progress_model(task: ResearchTask) -> dict[str, Any]:
+    progress = task.progress or {}
+    current_status = _frontend_status(task.status)
+    current_stage = str(progress.get("stage", task.status) or task.status).lower()
+
+    searching_progress = int(progress.get("searching", 0) or 0)
+    analyzing_progress = int(progress.get("analyzing", 0) or 0)
+    report_progress = int(progress.get("report", 0) or 0)
+
+    def stage_payload(key: str, label: str, weight: int, status: str, stage_progress: int) -> dict[str, Any]:
+        bounded_progress = max(0, min(100, int(stage_progress)))
+        return {
+            "key": key,
+            "label": label,
+            "weight": weight,
+            "status": status,
+            "progress_percent": bounded_progress,
+        }
+
+    if current_status == "completed":
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "completed", 100),
+            stage_payload("retrieval", "数据检索", 35, "completed", 100),
+            stage_payload("analysis", "结构化分析", 35, "completed", 100),
+            stage_payload("report", "报告生成", 20, "completed", 100),
+        ]
+    elif current_status == "cancelled":
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "completed", 100),
+            stage_payload("retrieval", "数据检索", 35, "failed", max(searching_progress, 70)),
+            stage_payload("analysis", "结构化分析", 35, "pending", 0),
+            stage_payload("report", "报告生成", 20, "pending", 0),
+        ]
+    elif current_status == "failed":
+        if current_stage == "searching":
+            stages = [
+                stage_payload("ingest", "任务接收", 10, "completed", 100),
+                stage_payload("retrieval", "数据检索", 35, "failed", max(searching_progress, 70)),
+                stage_payload("analysis", "结构化分析", 35, "pending", 0),
+                stage_payload("report", "报告生成", 20, "pending", 0),
+            ]
+        else:
+            stages = [
+                stage_payload("ingest", "任务接收", 10, "completed", 100),
+                stage_payload("retrieval", "数据检索", 35, "completed", max(searching_progress, 100)),
+                stage_payload("analysis", "结构化分析", 35, "failed", max(analyzing_progress, 70)),
+                stage_payload("report", "报告生成", 20, "pending", 0),
+            ]
+    elif current_status == "waiting_user":
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "completed", 100),
+            stage_payload("retrieval", "数据检索", 35, "completed", max(searching_progress, 100)),
+            stage_payload("analysis", "结构化分析", 35, "waiting_user", max(analyzing_progress, 85)),
+            stage_payload("report", "报告生成", 20, "pending", 0),
+        ]
+    elif current_status == "analyzing":
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "completed", 100),
+            stage_payload("retrieval", "数据检索", 35, "completed", max(searching_progress, 100)),
+            stage_payload("analysis", "结构化分析", 35, "running", max(analyzing_progress, 60)),
+            stage_payload("report", "报告生成", 20, "running" if report_progress > 0 else "pending", max(report_progress, 0)),
+        ]
+    elif current_status == "searching":
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "completed", 100),
+            stage_payload("retrieval", "数据检索", 35, "running", max(searching_progress, 20)),
+            stage_payload("analysis", "结构化分析", 35, "pending", 0),
+            stage_payload("report", "报告生成", 20, "pending", 0),
+        ]
+    else:
+        stages = [
+            stage_payload("ingest", "任务接收", 10, "running" if current_status == "pending" else "completed", 10 if current_status == "pending" else 100),
+            stage_payload("retrieval", "数据检索", 35, "pending", 0),
+            stage_payload("analysis", "结构化分析", 35, "pending", 0),
+            stage_payload("report", "报告生成", 20, "pending", 0),
+        ]
+
+    total_weight = sum(stage["weight"] for stage in stages)
+    completed_weight = sum(stage["weight"] * stage["progress_percent"] / 100 for stage in stages)
+    percent = 0 if total_weight <= 0 else round((completed_weight / total_weight) * 100)
+    current_stage_index = next((index for index, stage in enumerate(stages) if stage["status"] not in {"completed", "skipped"}), len(stages) - 1)
+
+    return {
+        "total_weight": total_weight,
+        "completed_weight": round(completed_weight, 2),
+        "percent": percent,
+        "current_stage_index": current_stage_index,
+        "stages": stages,
+    }
 
 
 def _serialize_history_task(task: ResearchTask) -> dict:
@@ -72,6 +173,106 @@ def _request_data(request: HttpRequest) -> dict:
         except (json.JSONDecodeError, TypeError):
             return {}
     return request.POST
+
+
+def _workflow_node_kind(event_type: str) -> str:
+    normalized = (event_type or "").strip().lower()
+    if normalized in {"tool_call", "subagent_tool_call"}:
+        return "tool_call"
+    if normalized in {"tool_result", "subagent_tool_result"}:
+        return "tool_return"
+    if normalized in {"message", "subagent_message"}:
+        return "llm_message"
+    if normalized in {"subagent_start", "subagent_complete"}:
+        return "subagent"
+    if normalized in {"pre_tool_text", "subagent_pre_tool_text"}:
+        return "planning"
+    return "business"
+
+
+def _workflow_execution_id(detail: dict[str, Any]) -> str | None:
+    for key in ("id", "completed_by_tool_call_id"):
+        value = str(detail.get(key, "") or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _pair_workflow_nodes(nodes: list[dict[str, Any]]) -> None:
+    call_kinds = {"tool_call"}
+    return_kinds = {"tool_return"}
+    calls_by_execution: dict[str, list[dict[str, Any]]] = {}
+    returns_by_execution: dict[str, list[dict[str, Any]]] = {}
+
+    for index, node in enumerate(nodes):
+        node["_order_index"] = index
+        execution_id = node.get("execution_id")
+        if not execution_id:
+            continue
+        node_kind = node.get("node_kind")
+        if node_kind in call_kinds:
+            calls_by_execution.setdefault(execution_id, []).append(node)
+        elif node_kind in return_kinds:
+            returns_by_execution.setdefault(execution_id, []).append(node)
+
+    for execution_id in set(calls_by_execution) | set(returns_by_execution):
+        call_nodes = sorted(calls_by_execution.get(execution_id, []), key=lambda item: item["_order_index"])
+        return_nodes = sorted(returns_by_execution.get(execution_id, []), key=lambda item: item["_order_index"])
+        for call_node, return_node in zip(call_nodes, return_nodes):
+            call_node["paired_node_id"] = return_node["node_id"]
+            return_node["paired_node_id"] = call_node["node_id"]
+
+    for node in nodes:
+        node.pop("_order_index", None)
+
+
+def _summarize_event_message(step_name: str, detail: dict[str, Any]) -> str:
+    event_type = str(detail.get("event_type", "") or "").strip().lower()
+
+    if event_type in {"tool_call", "subagent_tool_call"}:
+        args = detail.get("args") if isinstance(detail.get("args"), dict) else {}
+        query = str(args.get("query", "") or "").strip()
+        max_results = args.get("max_results")
+        if query and max_results:
+            return f"已发起工具调用，查询词为“{query}”，预期返回 {max_results} 条结果。"
+        if query:
+            return f"已发起工具调用，查询词为“{query}”。"
+        return f"{step_name} 已发起。"
+
+    if event_type in {"tool_result", "subagent_tool_result"}:
+        content = detail.get("content")
+        if isinstance(content, dict):
+            if content.get("ok") is False:
+                error = str(content.get("error", "") or "").strip()
+                query = str(content.get("query", "") or "").strip()
+                if error and query:
+                    return f"工具返回失败：{error}。查询词：“{query}”。"
+                if error:
+                    return f"工具返回失败：{error}。"
+            result_count = content.get("count") or content.get("result_count") or content.get("total")
+            if result_count not in (None, ""):
+                return f"工具已返回结果，共 {result_count} 条。"
+        text = content_to_text(content).strip()
+        if text:
+            condensed = " ".join(text.split())
+            return condensed[:180]
+        return f"{step_name} 已完成。"
+
+    if event_type in {"message", "subagent_message", "pre_tool_text", "subagent_pre_tool_text"}:
+        message = str(detail.get("message", "") or "").strip()
+        if message:
+            condensed = " ".join(message.split())
+            return condensed[:180]
+
+    if event_type == "subagent_start":
+        description = str(detail.get("description", "") or "").strip()
+        return description[:180] if description else f"{step_name} 已启动。"
+
+    if event_type == "subagent_complete":
+        message = str(detail.get("message", "") or "").strip()
+        return message[:180] if message else f"{step_name} 已完成。"
+
+    return step_name
 
 
 @response_wrapper
@@ -166,11 +367,13 @@ def task_status(request: HttpRequest, task_id: int):
     if not task:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
     progress = _task_progress_percent(task)
+    progress_model = _progress_model(task)
     return success_api_response({
         "task_id": str(task.id),
         "status": _frontend_status(task.status),
         "current_stage": (task.progress or {}).get("stage", task.status),
-        "progress": progress,
+        "progress": progress_model["percent"] if isinstance(progress_model.get("percent"), int) else progress,
+        "progress_model": progress_model,
         "hint": "任务已完成" if task.status == "COMPLETED" else "任务处理中",
         "object_name": task.object_name,
         "object_type": _frontend_object_type(task.object_type),
@@ -285,6 +488,8 @@ def task_steps(request: HttpRequest, task_id: int):
     edges = []
     previous = None
     for index, log in enumerate(logs):
+        detail = log.get("detail") if isinstance(log.get("detail"), dict) else {}
+        event_type = str(detail.get("event_type", "") or "")
         node_id = str(log.get("id") or index + 1)
         status = (log.get("step_status") or log.get("status") or "completed").lower()
         if status == "paused":
@@ -294,6 +499,10 @@ def task_steps(request: HttpRequest, task_id: int):
             "node_name": log.get("step_name") or log.get("name") or f"步骤 {index + 1}",
             "node_status": status,
             "description": str(log.get("detail") or ""),
+            "node_kind": _workflow_node_kind(event_type),
+            "event_type": event_type or None,
+            "execution_id": _workflow_execution_id(detail),
+            "paired_node_id": None,
             "can_intervene": bool(log.get("is_interactive")),
             "metrics": [],
             "updated_at": log.get("created_at"),
@@ -301,6 +510,7 @@ def task_steps(request: HttpRequest, task_id: int):
         if previous:
             edges.append({"from": previous, "to": node_id})
         previous = node_id
+    _pair_workflow_nodes(nodes)
     return success_api_response({
         "task_id": str(task_id),
         "nodes": nodes,
@@ -392,8 +602,11 @@ def task_events(request: HttpRequest, task_id: int):
     if not _get_user_task(task_id, request.user.id):
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
     logs = TaskStepLog.objects.filter(task_id=task_id).order_by("created_at")
-    events = [
-        {
+    events = []
+    for log in logs:
+        detail = log.detail if isinstance(log.detail, dict) else {}
+        event_type = str(detail.get("event_type", "") or "")
+        events.append({
             "event_id": str(log.id),
             "task_id": str(task_id),
             "node_id": str(log.id),
@@ -401,12 +614,13 @@ def task_events(request: HttpRequest, task_id: int):
             "node_status": "waiting_user" if log.step_status == "PAUSED" else log.step_status.lower(),
             "level": "error" if log.step_status == "FAILED" else "info",
             "title": log.step_name,
-            "message": str(log.detail or ""),
+            "message": _summarize_event_message(log.step_name, detail),
             "metrics": {},
             "timestamp": log.created_at.isoformat(),
-        }
-        for log in logs
-    ]
+            "event_type": event_type or None,
+            "node_kind": _workflow_node_kind(event_type),
+            "execution_id": _workflow_execution_id(detail),
+        })
     return success_api_response(events)
 
 

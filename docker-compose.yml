@@ -48,6 +48,15 @@ services:
       S3_ADDRESS: minio:9000
       S3_BUCKET_REPORTS: ${S3_BUCKET_REPORTS:-eightfeet-reports}
       S3_USE_SSL: ${S3_USE_SSL:-false}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USE_SSL: ${SMTP_USE_SSL:-true}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
+      SMTP_TIMEOUT: ${SMTP_TIMEOUT:-15}
+      SMTP_USE_LOCALTIME: ${SMTP_USE_LOCALTIME:-true}
       STATIC_ROOT: /var/www/8feet/staticfiles
       LOG_DIR: /var/log/8feet
     ports:
@@ -91,6 +100,15 @@ services:
       S3_ADDRESS: minio:9000
       S3_BUCKET_REPORTS: ${S3_BUCKET_REPORTS:-eightfeet-reports}
       S3_USE_SSL: ${S3_USE_SSL:-false}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USE_SSL: ${SMTP_USE_SSL:-true}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
+      SMTP_TIMEOUT: ${SMTP_TIMEOUT:-15}
+      SMTP_USE_LOCALTIME: ${SMTP_USE_LOCALTIME:-true}
       STATIC_ROOT: /var/www/8feet/staticfiles
       LOG_DIR: /var/log/8feet
     volumes:

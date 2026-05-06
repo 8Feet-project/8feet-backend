@@ -39,6 +39,7 @@ from research.interface.research_runtime import (
     _resolve_max_turns,
 )
 from research.interface.research_interface import infer_object_type
+from research.api.research_api import _progress_model
 
 
 class ResearchRuntimeConstraintTests(SimpleTestCase):
@@ -222,6 +223,34 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertIn("web_search 只用于发现候选网址", prompt)
         self.assertIn("brief_report_path", prompt)
         self.assertIn("present_report", prompt)
+
+
+class ResearchProgressModelTests(SimpleTestCase):
+    def test_progress_model_uses_fixed_business_stage_template(self):
+        task = SimpleNamespace(
+            status="WAITING_USER",
+            progress={
+                "stage": "ANALYZING",
+                "searching": 100,
+                "analyzing": 82,
+                "report": 0,
+            },
+        )
+
+        model = _progress_model(task)
+
+        self.assertEqual(model["total_weight"], 100)
+        self.assertEqual(len(model["stages"]), 4)
+        self.assertEqual(
+            [stage["key"] for stage in model["stages"]],
+            ["ingest", "retrieval", "analysis", "report"],
+        )
+        self.assertEqual(model["stages"][0]["status"], "completed")
+        self.assertEqual(model["stages"][1]["status"], "completed")
+        self.assertEqual(model["stages"][2]["status"], "waiting_user")
+        self.assertEqual(model["stages"][3]["status"], "pending")
+        self.assertEqual(model["stages"][2]["progress_percent"], 85)
+        self.assertEqual(model["percent"], 75)
 
     def test_integrator_system_message_requires_report_contract(self):
         system_message = build_cross_integrator_system_message()
