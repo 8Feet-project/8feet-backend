@@ -54,10 +54,10 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
         self.assertEqual(infer_object_type("腾讯控股", None), "COMPANY")
 
     def test_standard_research_uses_default_turn_budget(self):
-        self.assertEqual(_resolve_max_turns({}), 10)
+        self.assertEqual(_resolve_max_turns({}), 18)
 
     def test_deep_research_keeps_larger_turn_budget(self):
-        self.assertEqual(_resolve_max_turns({"research_depth": "deep"}), 18)
+        self.assertEqual(_resolve_max_turns({"research_depth": "deep"}), 24)
 
     def test_execution_constraints_do_not_limit_tool_call_counts(self):
         constraints = _build_execution_constraints({})

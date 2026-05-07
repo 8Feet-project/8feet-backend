@@ -107,7 +107,7 @@ from research.models import (
     TaskStepLog,
 )
 
-DEFAULT_MAX_TURNS = 10
+DEFAULT_MAX_TURNS = 18
 MAX_WORKERS = 4
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / '.env')
@@ -496,7 +496,7 @@ def _resolve_max_turns(search_params: dict[str, Any] | None) -> int:
     params = search_params or {}
     default_by_depth = {
         "quick": 6,
-        "deep": 18,
+        "deep": 24,
     }.get(_normalize_research_depth(params), DEFAULT_MAX_TURNS)
     try:
         value = int(params.get("max_turns", default_by_depth))

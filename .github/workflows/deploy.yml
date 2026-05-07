@@ -185,6 +185,10 @@ jobs:
 
           if [ -f "${DEPLOY_APP_DIR}/.env" ]; then
             env_file_args=(--env-file "${DEPLOY_APP_DIR}/.env")
+            set -a
+            # shellcheck disable=SC1090
+            . "${DEPLOY_APP_DIR}/.env"
+            set +a
           fi
 
           cd "${worktree_dir}"
