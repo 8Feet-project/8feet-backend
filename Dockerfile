@@ -52,8 +52,8 @@ COPY pyproject.toml uv.lock README.md ./
 COPY efeet ./efeet
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --no-install-project \
-    && ./.venv/bin/python -m playwright install --only-shell chromium \
-    && test -x /ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell
+    && ./.venv/bin/python -m playwright install chromium \
+    && test -x /ms-playwright/chromium-*/chrome-linux64/chrome
 
 COPY src ./src
 COPY scripts/docker/entrypoint.sh ./scripts/docker/entrypoint.sh
