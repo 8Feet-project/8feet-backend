@@ -3,7 +3,8 @@ ASGI config for 8Feet project.
 支持 Django Channels (WebSocket) 用于全流程监控 (FR-JSDY-0003)。
 """
 import os
-from channels.routing import ProtocolTypeRouter
+from channels.auth import AuthMiddlewareStack
+from channels.routing import ProtocolTypeRouter, URLRouter
 from django.conf import settings
 from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler
 from django.core.asgi import get_asgi_application
@@ -18,8 +19,9 @@ http_application = (
     else django_asgi_app
 )
 
+import research.routing
+
 application = ProtocolTypeRouter({
     "http": http_application,
-    # WebSocket 路由将在 research 模块中定义
-    # "websocket": AuthMiddlewareStack(URLRouter(research.routing.websocket_urlpatterns)),
+    "websocket": AuthMiddlewareStack(URLRouter(research.routing.websocket_urlpatterns)),
 })

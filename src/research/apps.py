@@ -8,3 +8,6 @@ from django.apps import AppConfig
 class ResearchConfig(AppConfig):
     name = 'research'
     verbose_name = '调研任务与 DeepSearch'
+
+    def ready(self):
+        import research.signals  # noqa: F401

@@ -98,6 +98,7 @@ CSRF_TRUSTED_ORIGINS = _to_list(
 # 应用注册
 # ============================================================
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -108,7 +109,7 @@ INSTALLED_APPS = [
     'channels',
     'users',
     'llm_manager',
-    'research',
+    'research.apps.ResearchConfig',
     'reports',
     'analytics',
 ]

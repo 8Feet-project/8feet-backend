@@ -7,6 +7,7 @@ from django.utils import timezone
 from research.interface import research_runtime
 from research.interface.thread_codec import json_safe
 from research.models import ResearchTask, TaskStepLog
+from research.realtime import publish_task_update
 
 from .types import CROSS_VALIDATION_STEP_NAME
 
@@ -106,6 +107,13 @@ def _update_cross_progress(
         **json_safe(extra),
     }
     ResearchTask.objects.filter(pk=task.id).update(progress=progress, updated_at=timezone.now())
+    publish_task_update(
+        task.id,
+        "cross_validation_progress_changed",
+        {
+            "cross_validation": progress["cross_validation"],
+        },
+    )
 
 
 def _latest_cross_log(task: ResearchTask) -> TaskStepLog | None:

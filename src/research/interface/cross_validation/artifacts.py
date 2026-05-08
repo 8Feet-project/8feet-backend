@@ -163,12 +163,4 @@ def _strip_tool_call_markup(text: str) -> str:
 
 
 def _is_llm_failure_output(text: str) -> bool:
-    normalized = str(text or "").strip().lower()
-    if not normalized:
-        return False
-    failure_markers = (
-        "the configured llm provider is temporarily unavailable",
-        "the configured llm provider rejected the request",
-        "llm request failed:",
-    )
-    return any(marker in normalized for marker in failure_markers)
+    return research_runtime._is_llm_failure_output(text)

@@ -392,7 +392,40 @@ class ResearchProgressModelTests(SimpleTestCase):
                 "The configured LLM provider is temporarily unavailable after multiple retries."
             )
         )
+        self.assertTrue(
+            research_runtime._is_llm_failure_output(
+                "The configured LLM provider is temporarily unavailable after multiple retries."
+            )
+        )
+        self.assertTrue(
+            research_runtime._is_llm_failure_output(
+                "The configured LLM provider rate limit was exceeded after multiple retries."
+            )
+        )
         self.assertFalse(_is_llm_failure_output("# 正常报告\n- 结论"))
+
+    def test_provider_failure_output_aborts_success_persistence(self):
+        task = SimpleNamespace(id=1)
+        conversation = SimpleNamespace()
+        thread = SimpleNamespace(history=[], state={})
+        failure_text = "The configured LLM provider is temporarily unavailable after multiple retries."
+
+        with patch.object(research_runtime, "resolve_effective_output", return_value=failure_text):
+            with self.assertRaisesRegex(RuntimeError, "temporarily unavailable"):
+                research_runtime._persist_success(
+                    task=task,
+                    conversation=conversation,
+                    thread=thread,
+                    prompt="prompt",
+                    final_output=failure_text,
+                    create_report=True,
+                    run_number=1,
+                    previous_history_count=0,
+                    previous_presented_report_count=0,
+                    previous_report_row_count=0,
+                    llm_config=None,
+                    latency_ms=1.0,
+                )
 
     def test_tool_call_markup_is_stripped_from_report_tail(self):
         self.assertEqual(

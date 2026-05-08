@@ -85,6 +85,7 @@ from research.interface.thread_codec import (
     serialize_history,
     serialize_state,
 )
+from research.realtime import publish_task_update
 from research.models import (
     MESSAGE_ROLE_AI,
     MESSAGE_ROLE_HUMAN,
@@ -541,6 +542,14 @@ def _record_event(task_id: int, run_number: int, event: dict[str, Any]) -> None:
         progress=progress,
         updated_at=timezone.now(),
     )
+    publish_task_update(
+        task_id,
+        "task_progress_changed",
+        {
+            "status": task_status,
+            "progress": progress,
+        },
+    )
 
 
 def _mark_matching_tool_call_completed(task_id: int, run_number: int, event: dict[str, Any]) -> None:
@@ -781,6 +790,8 @@ def _persist_success(
         effective_output=effective_output,
         create_report=create_report,
     )
+    if _is_llm_failure_output(effective_output):
+        raise RuntimeError(effective_output)
     citations = _extract_citations(state_snapshot)
     presented_reports = extract_presented_reports(state_snapshot)
     new_presented_reports = presented_reports[previous_presented_report_count:]
@@ -906,6 +917,19 @@ def _recover_report_output_from_tool_logs(
         ):
             return content.strip()
     return effective_output
+
+
+def _is_llm_failure_output(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+    failure_markers = (
+        "the configured llm provider is temporarily unavailable",
+        "the configured llm provider rejected the request",
+        "the configured llm provider rate limit was exceeded",
+        "llm request failed:",
+    )
+    return any(marker in normalized for marker in failure_markers)
 
 
 def _persist_failure(
