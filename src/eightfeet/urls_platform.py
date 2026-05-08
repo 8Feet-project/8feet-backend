@@ -4,6 +4,7 @@
 import json
 import secrets
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.core.validators import validate_email
@@ -28,9 +29,8 @@ def _json_error(message: str, status: int = 400):
 
 
 def _build_init_response(super_admin_profile, message: str = "", **extra_fields):
-    User = get_user_model()
     payload = {
-        "initialized": User.objects.exists(),
+        "initialized": super_admin_profile is not None,
         "super_admin_user_id": super_admin_profile.user_id if super_admin_profile else None,
     }
     if message:
@@ -66,15 +66,10 @@ def _build_super_admin_username(base_email: str) -> str:
 @response_wrapper
 def init_status(request):
     """获取平台初始化状态"""
-    User = get_user_model()
-    # 逻辑：只要存在任何用户，即视为已通过基础初始化流程
-    has_any_user = User.objects.exists()
-    
-    # 检查是否存在超级管理员
     has_super_admin = UserProfile.objects.filter(role=ROLE_SUPER_ADMIN).exists()
     
     return success_api_response({
-        "initialized": has_any_user,
+        "initialized": has_super_admin,
         "has_super_admin": has_super_admin
     })
 
@@ -179,6 +174,11 @@ def initialize(request):
     return _build_init_response(
         super_admin_profile,
         message="平台初始化完成" if created else "已将现有账户提升为超级管理员",
+        username=username,
+        admin_email=admin_email,
+        mail_sent=mail_sent,
+        created=created,
+        temp_password=temp_password if settings.DEBUG and created else None,
     )
 
 urlpatterns = [
