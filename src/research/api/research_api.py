@@ -198,6 +198,16 @@ def _workflow_execution_id(detail: dict[str, Any]) -> str | None:
     return None
 
 
+def _workflow_payload(detail: dict[str, Any]) -> dict[str, Any]:
+    event_type = str(detail.get("event_type", "") or "").strip().lower()
+    payload: dict[str, Any] = {"event_type": event_type} if event_type else {}
+    if event_type in {"tool_call", "subagent_tool_call"}:
+        payload["input"] = detail.get("args", {})
+    elif event_type in {"tool_result", "subagent_tool_result"}:
+        payload["output"] = detail.get("content")
+    return payload
+
+
 def _pair_workflow_nodes(nodes: list[dict[str, Any]]) -> None:
     call_kinds = {"tool_call"}
     return_kinds = {"tool_return"}
@@ -499,6 +509,7 @@ def task_steps(request: HttpRequest, task_id: int):
             "node_name": log.get("step_name") or log.get("name") or f"步骤 {index + 1}",
             "node_status": status,
             "description": str(log.get("detail") or ""),
+            "payload": _workflow_payload(detail),
             "node_kind": _workflow_node_kind(event_type),
             "event_type": event_type or None,
             "execution_id": _workflow_execution_id(detail),
@@ -616,6 +627,7 @@ def task_events(request: HttpRequest, task_id: int):
             "title": log.step_name,
             "message": _summarize_event_message(log.step_name, detail),
             "metrics": {},
+            "payload": _workflow_payload(detail),
             "timestamp": log.created_at.isoformat(),
             "event_type": event_type or None,
             "node_kind": _workflow_node_kind(event_type),
