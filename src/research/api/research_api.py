@@ -205,6 +205,8 @@ def _workflow_payload(detail: dict[str, Any]) -> dict[str, Any]:
         payload["input"] = detail.get("args", {})
     elif event_type in {"tool_result", "subagent_tool_result"}:
         payload["output"] = detail.get("content")
+    elif event_type in {"pre_tool_text", "subagent_pre_tool_text", "message", "subagent_message"}:
+        payload["text"] = content_to_text(detail.get("message", ""))
     return payload
 
 
@@ -234,6 +236,169 @@ def _pair_workflow_nodes(nodes: list[dict[str, Any]]) -> None:
 
     for node in nodes:
         node.pop("_order_index", None)
+
+
+def _tool_name_from_node(node: dict[str, Any]) -> str:
+    name = str(node.get("node_name") or "").strip()
+    for marker in ("调用工具:", "工具返回:"):
+        if marker in name:
+            return name.split(marker, 1)[1].strip() or "未知工具"
+    return name or "未知工具"
+
+
+def _workflow_node_from_log(log: dict[str, Any], index: int) -> dict[str, Any]:
+    detail = log.get("detail") if isinstance(log.get("detail"), dict) else {}
+    event_type = str(detail.get("event_type", "") or "")
+    node_id = str(log.get("id") or index + 1)
+    status = (log.get("step_status") or log.get("status") or "completed").lower()
+    if status == "paused":
+        status = "waiting_user"
+    return {
+        "node_id": node_id,
+        "node_name": log.get("step_name") or log.get("name") or f"步骤 {index + 1}",
+        "node_status": status,
+        "description": str(log.get("detail") or ""),
+        "payload": _workflow_payload(detail),
+        "node_kind": _workflow_node_kind(event_type),
+        "event_type": event_type or None,
+        "execution_id": _workflow_execution_id(detail),
+        "paired_node_id": None,
+        "can_intervene": bool(log.get("is_interactive")),
+        "metrics": [],
+        "updated_at": log.get("created_at"),
+    }
+
+
+def _workflow_tool_payload(call_node: dict[str, Any] | None, return_node: dict[str, Any] | None) -> dict[str, Any]:
+    payload = {
+        "tool_name": _tool_name_from_node(call_node or return_node or {}),
+        "execution_id": (call_node or return_node or {}).get("execution_id"),
+        "status": (return_node or call_node or {}).get("node_status") or "running",
+        "input": ((call_node or {}).get("payload") or {}).get("input"),
+        "output": ((return_node or {}).get("payload") or {}).get("output"),
+        "started_at": (call_node or {}).get("updated_at"),
+        "finished_at": (return_node or {}).get("updated_at"),
+    }
+    source_ids = [
+        str(node.get("node_id"))
+        for node in (call_node, return_node)
+        if node and node.get("node_id") is not None
+    ]
+    payload["source_node_ids"] = source_ids
+    return payload
+
+
+def _agent_step_status(nodes: list[dict[str, Any]]) -> str:
+    statuses = [str(node.get("node_status") or "").lower() for node in nodes]
+    if any(status == "failed" for status in statuses):
+        return "failed"
+    if any(status == "waiting_user" for status in statuses):
+        return "waiting_user"
+    if any(status == "running" for status in statuses):
+        return "running"
+    if statuses and all(status in {"completed", "skipped"} for status in statuses):
+        return "completed"
+    return statuses[-1] if statuses else "completed"
+
+
+def _agent_step_node(nodes: list[dict[str, Any]], order: int) -> dict[str, Any]:
+    planning_node = next((node for node in nodes if node.get("node_kind") == "planning"), None)
+    tool_call_nodes = [node for node in nodes if node.get("node_kind") == "tool_call"]
+    tool_return_nodes = [node for node in nodes if node.get("node_kind") == "tool_return"]
+    returns_by_id = {
+        str(node.get("execution_id")): node
+        for node in tool_return_nodes
+        if node.get("execution_id")
+    }
+    used_return_ids: set[str] = set()
+    tools: list[dict[str, Any]] = []
+
+    for call_node in tool_call_nodes:
+        execution_id = str(call_node.get("execution_id") or "")
+        return_node = returns_by_id.get(execution_id) if execution_id else None
+        if return_node and return_node.get("node_id") is not None:
+            used_return_ids.add(str(return_node["node_id"]))
+        tools.append(_workflow_tool_payload(call_node, return_node))
+
+    for return_node in tool_return_nodes:
+        node_id = str(return_node.get("node_id"))
+        if node_id not in used_return_ids:
+            tools.append(_workflow_tool_payload(None, return_node))
+
+    source_ids = [str(node.get("node_id")) for node in nodes if node.get("node_id") is not None]
+    planning_text = str(((planning_node or {}).get("payload") or {}).get("text") or "").strip()
+    tool_count = len(tools)
+    summary = planning_text or (
+        f"本轮执行了 {tool_count} 个工具调用。" if tool_count else "本轮动作已记录。"
+    )
+    updated_at = next((node.get("updated_at") for node in reversed(nodes) if node.get("updated_at")), None)
+
+    return {
+        "node_id": f"agent-step-{source_ids[0] if source_ids else order}",
+        "node_name": f"Agent 步骤 {order}",
+        "node_status": _agent_step_status(nodes),
+        "description": summary,
+        "summary": summary,
+        "payload": {
+            "planning": planning_text,
+            "tools": tools,
+            "source_node_ids": source_ids,
+        },
+        "node_kind": "agent_step",
+        "event_type": "agent_step",
+        "execution_id": None,
+        "paired_node_id": None,
+        "can_intervene": any(bool(node.get("can_intervene")) for node in nodes),
+        "metrics": [],
+        "updated_at": updated_at,
+    }
+
+
+def _collapse_agent_step_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    collapsed: list[dict[str, Any]] = []
+    index = 0
+    agent_step_count = 0
+
+    while index < len(nodes):
+        node = nodes[index]
+        if node.get("node_kind") == "planning":
+            group = [node]
+            index += 1
+            while index < len(nodes) and nodes[index].get("node_kind") in {"tool_call", "tool_return"}:
+                group.append(nodes[index])
+                index += 1
+            agent_step_count += 1
+            collapsed.append(_agent_step_node(group, agent_step_count))
+            continue
+
+        if node.get("node_kind") == "tool_call":
+            group = []
+            while index < len(nodes) and nodes[index].get("node_kind") in {"tool_call", "tool_return"}:
+                group.append(nodes[index])
+                index += 1
+            agent_step_count += 1
+            collapsed.append(_agent_step_node(group, agent_step_count))
+            continue
+
+        collapsed.append(node)
+        index += 1
+
+    return collapsed
+
+
+def _workflow_edges(nodes: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {"from": str(nodes[index - 1]["node_id"]), "to": str(nodes[index]["node_id"])}
+        for index in range(1, len(nodes))
+    ]
+
+
+def _visible_workflow_node_id(nodes: list[dict[str, Any]], raw_node_id: str) -> str:
+    for node in nodes:
+        source_ids = (((node.get("payload") or {}).get("source_node_ids")) or [])
+        if raw_node_id == str(node.get("node_id")) or raw_node_id in [str(item) for item in source_ids]:
+            return str(node.get("node_id") or raw_node_id)
+    return raw_node_id
 
 
 def _summarize_event_message(step_name: str, detail: dict[str, Any]) -> str:
@@ -494,39 +659,17 @@ def task_steps(request: HttpRequest, task_id: int):
     [route]: GET /api/v1/research/tasks/{task_id}/workflow
     """
     logs = get_task_step_logs(task_id, request.user.id)
-    nodes = []
-    edges = []
-    previous = None
-    for index, log in enumerate(logs):
-        detail = log.get("detail") if isinstance(log.get("detail"), dict) else {}
-        event_type = str(detail.get("event_type", "") or "")
-        node_id = str(log.get("id") or index + 1)
-        status = (log.get("step_status") or log.get("status") or "completed").lower()
-        if status == "paused":
-            status = "waiting_user"
-        nodes.append({
-            "node_id": node_id,
-            "node_name": log.get("step_name") or log.get("name") or f"步骤 {index + 1}",
-            "node_status": status,
-            "description": str(log.get("detail") or ""),
-            "payload": _workflow_payload(detail),
-            "node_kind": _workflow_node_kind(event_type),
-            "event_type": event_type or None,
-            "execution_id": _workflow_execution_id(detail),
-            "paired_node_id": None,
-            "can_intervene": bool(log.get("is_interactive")),
-            "metrics": [],
-            "updated_at": log.get("created_at"),
-        })
-        if previous:
-            edges.append({"from": previous, "to": node_id})
-        previous = node_id
+    raw_nodes = [_workflow_node_from_log(log, index) for index, log in enumerate(logs)]
+    _pair_workflow_nodes(raw_nodes)
+    nodes = _collapse_agent_step_nodes(raw_nodes)
+    edges = _workflow_edges(nodes)
     _pair_workflow_nodes(nodes)
+    current_raw_node = str(raw_nodes[-1]["node_id"]) if raw_nodes else ""
     return success_api_response({
         "task_id": str(task_id),
         "nodes": nodes,
         "edges": edges,
-        "current_node": nodes[-1]["node_id"] if nodes else "",
+        "current_node": _visible_workflow_node_id(nodes, current_raw_node) if current_raw_node else "",
     })
 
 
