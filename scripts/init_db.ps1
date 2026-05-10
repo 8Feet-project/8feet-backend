@@ -68,10 +68,10 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "`n========================================" -ForegroundColor Green
     Write-Host "  初始化完成！" -ForegroundColor Green
     Write-Host "========================================" -ForegroundColor Green
-    Write-Host "  PostgreSQL: localhost:5432" -ForegroundColor Cyan
-    Write-Host "  Redis:      localhost:6379" -ForegroundColor Cyan
-    Write-Host "  Minio:      http://localhost:9001 (管理界面)" -ForegroundColor Cyan
-    Write-Host "`n  运行开发服务器: uv run python src/manage.py runserver" -ForegroundColor Cyan
+    Write-Host "  PostgreSQL: localhost:48882" -ForegroundColor Cyan
+    Write-Host "  Redis:      localhost:48883" -ForegroundColor Cyan
+    Write-Host "  Minio:      http://localhost:48885 (管理界面)" -ForegroundColor Cyan
+    Write-Host "`n  运行开发服务器: uv run python src/manage.py runserver 127.0.0.1:48881" -ForegroundColor Cyan
 } else {
     Write-Error "数据库迁移失败，请检查错误信息。"
 }

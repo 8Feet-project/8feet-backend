@@ -28,18 +28,18 @@ XFrameOptions: "DENY"
 
 # PostgreSQL
 DatabaseHost: localhost
-DatabasePort: 5432
+DatabasePort: 48882
 DatabaseUser: admin
 DatabasePassword: "CHANGE_ME_DB_PASSWORD"
 DatabaseName: eightfeet
 
 # Redis
-RedisAddress: "localhost:6379"
+RedisAddress: "localhost:48883"
 RedisPassword: ""
 RedisDatabase: 0
 
 # Channels (未配置时回落到 RedisAddress)
-ChannelRedisAddress: "localhost:6379"
+ChannelRedisAddress: "localhost:48883"
 ChannelRedisPassword: ""
 ChannelRedisDatabase: 0
 
@@ -51,7 +51,7 @@ CeleryTaskTimeLimit: 600
 # Minio (S3-compatible Object Storage)
 S3SecretId: "CHANGE_ME_MINIO_USER"
 S3SecretKey: "CHANGE_ME_MINIO_PASSWORD"
-S3Address: "localhost:9000"
+S3Address: "localhost:48884"
 S3BucketReports: eightfeet-reports
 S3UseSSL: false
 

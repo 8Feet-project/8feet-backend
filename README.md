@@ -33,14 +33,14 @@ Linux:
 ./scripts/init_db.sh # linux已验证
 ```
 自动完成：
-- 启动 PostgreSQL 13 (端口 5432)
-- 启动 Redis 6.2 (端口 6379)
-- 启动 Minio (端口 9000/9001)
+- 启动 PostgreSQL 17.9 (宿主机端口 48882)
+- 启动 Redis 7.4.8 (宿主机端口 48883)
+- 启动 Minio (宿主机端口 48884/48885)
 - 执行 Django 数据库迁移
 
 ### 5. 运行开发服务器
 ```bash
-uv run python src/manage.py runserver
+uv run python src/manage.py runserver 127.0.0.1:48881
 ```
 
 ## 模块架构
