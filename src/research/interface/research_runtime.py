@@ -109,7 +109,7 @@ from research.models import (
     TaskStepLog,
 )
 
-DEFAULT_MAX_TURNS = 18
+DEFAULT_MAX_TURNS = 30
 MAX_WORKERS = 4
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / '.env')
@@ -135,7 +135,7 @@ def build_research_system_message() -> str:
     return (
         "你是 8Feet 商业对象智能调研分析助手。"
         "你的目标是围绕公司、股票、商品三类对象开展深入、可追溯的商业调研。"
-        "由你根据任务复杂度判断调研深度、检索范围和是否需要子代理协作。"
+        "先拆解调研维度，将并行检索和验证工作通过 task 工具分配给 deep-search 或 researcher 子代理，最后汇总结果产出报告。"
         f"\n{workflow_contract}"
         f"\n{report_contract}"
         f"{citation_contract}"
@@ -144,16 +144,6 @@ def build_research_system_message() -> str:
         "最终详细报告和简版报告文件只能由 Lead Agent 定稿，并在全部写入后调用 present_report。"
         "不要让子代理产出最终报告文件。"
     )
-
-
-def _normalize_research_depth(search_params: dict[str, Any] | None) -> str:
-    params = search_params or {}
-    depth = str(params.get("research_depth") or params.get("depth") or "standard").strip().lower()
-    if depth in {"quick", "fast", "lite"}:
-        return "quick"
-    if depth in {"deep", "advanced", "full"}:
-        return "deep"
-    return "standard"
 
 
 def _subagents_disabled(params: dict[str, Any]) -> bool:
@@ -168,27 +158,18 @@ def _subagents_disabled(params: dict[str, Any]) -> bool:
 
 def _build_execution_constraints(search_params: dict[str, Any] | None) -> str:
     params = search_params or {}
-    depth = _normalize_research_depth(params)
-    mode_name = {
-        "quick": "快速调研",
-        "deep": "深度调研",
-    }.get(depth, "标准调研")
-    subagent_rule = (
-        "由 Lead Agent 根据任务复杂度自行判断；内容较多、来源跨度大或需要多角度验证时，可调用 deep-search 或 researcher。"
-        if not _subagents_disabled(params)
-        else "当前参数禁用了子代理，不要调用 task 工具。"
-    )
-    return (
-        "执行建议:\n"
-        f"- 当前模式: {mode_name}。\n"
-        "- web_search 用于发现候选网址、信息面和检索方向；不要把搜索摘要当作引用证据。\n"
-        "- web_fetch 用于读取候选网页并形成可引用证据；优先抓取与专项框架和关键争议直接相关的来源。\n"
-        f"- task 子代理: {subagent_rule}\n"
-        "- bash 仅在需要处理本地文件、沙箱资料或命令行数据时使用；普通网页调研优先使用检索、抓取和结构化业务数据工具。\n"
-        "- 不要按来源数量机械停止；当证据覆盖对象专项框架、关键争议点和主要不确定性后，再收束生成最终详细版和简版 Markdown 报告。\n"
-        "- 如果搜索失败、网页不可访问或证据不足，不要反复扩大关键词范围，请在“风险与不确定性”中说明。\n"
-        "- 如果运行即将结束或工具不可用，直接基于已有证据输出阶段性最终报告。\n"
-    )
+    lines = [
+        "执行建议:",
+        "- web_search 用于发现候选网址、信息面和检索方向；不要把搜索摘要当作引用证据。",
+        "- web_fetch 用于读取候选网页并形成可引用证据；优先抓取与专项框架和关键争议直接相关的来源。",
+    ]
+    if not _subagents_disabled(params):
+        lines.append(
+            "- task 子代理: 将调研拆解为多个子任务，优先通过 task 工具调用 "
+            "deep-search 并行发现证据，再由 researcher 分析验证；"
+            "Lead Agent 负责规划、调度和最终定稿。"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def build_initial_prompt(task: ResearchTask) -> str:
@@ -212,7 +193,7 @@ def build_initial_prompt(task: ResearchTask) -> str:
         f"- 对象类型: {task.object_type}\n"
         f"\n{object_requirements}\n"
         "- 任务要求:\n"
-        "  1. 先明确调研思路，再按 DeepSearch 工作流和执行约束选择必要工具或子代理补充证据。\n"
+        "  1. 先拆解调研维度，按 DeepSearch 工作流将子任务通过 task 工具分配给子代理，再汇总定稿。\n"
         "  2. 必须优先覆盖上方对象类型专项调研框架，再补充通用商业分析维度。\n"
         "  3. 严格遵守下方引用约束，不能把无引用内容写成确定事实。\n"
         "  4. 严格遵守下方最终报告格式与交付要求。\n"
@@ -496,14 +477,10 @@ def _env_first(*names: str) -> str:
 
 def _resolve_max_turns(search_params: dict[str, Any] | None) -> int:
     params = search_params or {}
-    default_by_depth = {
-        "quick": 6,
-        "deep": 24,
-    }.get(_normalize_research_depth(params), DEFAULT_MAX_TURNS)
     try:
-        value = int(params.get("max_turns", default_by_depth))
+        value = int(params.get("max_turns", DEFAULT_MAX_TURNS))
     except (TypeError, ValueError):
-        value = default_by_depth
+        value = DEFAULT_MAX_TURNS
     return min(max(value, 6), 40)
 
 

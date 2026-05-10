@@ -82,7 +82,7 @@ class ResearchTask(models.Model):
     )
     search_params = models.JSONField(
         default=dict,
-        help_text="检索参数: 时间范围/信息源权威度/研究深度"
+        help_text="检索参数: 时间范围/信息源权威度"
     )
     status = models.CharField(
         max_length=16, choices=TASK_STATUS_CHOICES, default=STATUS_PENDING,

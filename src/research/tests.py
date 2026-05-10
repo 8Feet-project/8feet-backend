@@ -68,11 +68,15 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
         self.assertEqual(infer_object_type("黄金期货", "自动识别"), "PRODUCT")
         self.assertEqual(infer_object_type("腾讯控股", None), "COMPANY")
 
-    def test_standard_research_uses_default_turn_budget(self):
-        self.assertEqual(_resolve_max_turns({}), 18)
+    def test_default_max_turns(self):
+        self.assertEqual(_resolve_max_turns({}), 30)
 
-    def test_deep_research_keeps_larger_turn_budget(self):
-        self.assertEqual(_resolve_max_turns({"research_depth": "deep"}), 24)
+    def test_custom_max_turns_in_search_params(self):
+        self.assertEqual(_resolve_max_turns({"max_turns": 15}), 15)
+
+    def test_max_turns_clamped_to_range(self):
+        self.assertEqual(_resolve_max_turns({"max_turns": 2}), 6)
+        self.assertEqual(_resolve_max_turns({"max_turns": 99}), 40)
 
     def test_execution_constraints_do_not_limit_tool_call_counts(self):
         constraints = _build_execution_constraints({})
@@ -81,21 +85,17 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
         self.assertIn("web_search 用于发现候选网址", constraints)
         self.assertIn("web_fetch 用于读取候选网页", constraints)
         self.assertIn("task 子代理:", constraints)
-        self.assertIn("自行判断", constraints)
-        self.assertIn("deep-search 或 researcher", constraints)
-        self.assertIn("bash 仅在需要处理本地文件", constraints)
+        self.assertIn("将调研拆解为多个子任务，优先通过 task 工具", constraints)
+        self.assertIn("deep-search 并行发现证据", constraints)
         self.assertNotIn("最多调用", constraints)
         self.assertNotIn("task 子代理最多调用", constraints)
         self.assertNotIn("工具预算", constraints)
-        self.assertIn("不要按来源数量机械停止", constraints)
         self.assertNotIn("3 个以上可用来源", constraints)
-        self.assertIn("直接基于已有证据输出阶段性最终报告", constraints)
 
     def test_subagents_can_be_disabled_by_task_params(self):
         constraints = _build_execution_constraints({"enable_subagents": False})
 
-        self.assertIn("task 子代理:", constraints)
-        self.assertIn("当前参数禁用了子代理", constraints)
+        self.assertNotIn("task 子代理:", constraints)
 
     def test_initial_prompt_includes_object_type_research_frameworks(self):
         cases = [
@@ -151,15 +151,15 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
     def test_search_then_research_workflow_guides_deepsearch_delegation(self):
         contract = search_then_research_workflow()
 
-        self.assertIn("先 search", contract)
-        self.assertIn("再 research", contract)
+        self.assertIn("先拆解调研维度", contract)
+        self.assertIn("deep-search 子代理并行检索", contract)
         self.assertIn("canonical URL 去重", contract)
         self.assertIn("authority_score", contract)
         self.assertIn("优先官方披露、监管机构、交易所", contract)
         self.assertIn("稳定 cite key", contract)
-        self.assertIn("`deep-search`", contract)
-        self.assertIn("`researcher`", contract)
-        self.assertIn("不要按来源数量机械停止", contract)
+        self.assertIn("deep-search", contract)
+        self.assertIn("researcher", contract)
+        self.assertIn("web_fetch 或结构化工具", contract)
 
     def test_citation_contract_requires_fact_level_cite_keys(self):
         contract = citation_discipline_requirements()
@@ -185,10 +185,10 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
             self.assertNotIn("再尽快输出", text)
             self.assertNotIn("除非用户或任务参数明确要求 deep 深度模式", text)
             self.assertNotIn("3 个以上可用来源", text)
-            self.assertIn("根据任务复杂度判断", text)
+            self.assertIn("先拆解调研维度", text)
             self.assertIn("DeepSearch 工作流建议", text)
-            self.assertIn("`deep-search`", text)
-            self.assertIn("`researcher`", text)
+            self.assertIn("deep-search", text)
+            self.assertIn("researcher", text)
             self.assertIn("最终报告格式与交付要求", text)
             self.assertIn("PDF/Word 导出", text)
             self.assertIn("详细报告", text)

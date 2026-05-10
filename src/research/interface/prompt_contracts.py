@@ -82,17 +82,15 @@ def search_then_research_workflow() -> str:
     """Return the recommended search -> research workflow for lead agents."""
     return (
         "DeepSearch 工作流建议:\n"
-        "- 由 Lead Agent 根据任务复杂度判断调研深度、检索范围和是否需要子代理协作。\n"
-        "- 先 search: 使用 web_search 或结构化业务数据工具识别信息面、候选来源、关键维度和明显争议点；"
+        "- 先拆解调研维度，通过 task 工具分配给 deep-search 子代理并行检索和发现证据。\n"
+        "- deep-search 使用 web_search 或结构化业务数据工具识别信息面、候选来源、关键维度和明显争议点；"
         "web_search 结果已按 canonical URL 去重并附带 source_category/authority_score，选源时优先官方披露、监管机构、交易所、结构化数据和权威财经媒体。\n"
-        "- 再 research: 对高价值候选来源使用 web_fetch 或结构化工具获取可引用证据，并围绕对象专项框架验证、归纳和证伪。\n"
-        "- 证据入库时会尽量复用稳定 cite key：同一 canonical URL、同一复现代码，或同一小时内的实时数据快照，应视为同一证据来源。\n"
-        "- 当任务内容较多、来源跨度大、需要多角度发散或需要剔除噪声时，可以调用 task 工具的 "
-        "`deep-search` 子代理分角度搜索、筛选并沉淀 evidence 文件。\n"
-        "- 当已有 evidence 但需要提出观点、比较证据、验证或证伪判断时，可以调用 task 工具的 "
-        "`researcher` 子代理产出调研观点和论证摘要。\n"
+        "- 对高价值候选来源使用 web_fetch 或结构化工具获取可引用证据。\n"
+        "- deep-search 沉淀 evidence 文件后，通过 task 工具调用 researcher 子代理"
+        "对已有证据提出观点、比较证据、验证或证伪判断。\n"
+        "- 证据入库时尽量复用稳定 cite key："
+        "同一 canonical URL、同一复现代码，或同一小时内的实时数据快照，应视为同一证据来源。\n"
         "- Lead Agent 始终负责最终取舍、整合和定稿；子代理只提供证据路径、概述、观点和不确定性。\n"
-        "- 不要按来源数量机械停止；当证据已经覆盖对象专项框架、关键争议点和主要不确定性后，再收束生成最终报告。\n"
     )
 
 
