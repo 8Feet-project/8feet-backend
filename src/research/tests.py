@@ -1,3 +1,4 @@
+import json
 import os
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -263,6 +264,70 @@ class ResearchRealtimeReferenceTests(TestCase):
                 task=task,
                 source_url="https://www.caixinglobal.com/article",
                 source_title="Caixin Global article",
+            ).exists()
+        )
+        self.assertTrue(
+            any(call.args[1] == "references_changed" for call in publish_update.call_args_list)
+        )
+
+    def test_subagent_tool_result_content_guidance_persists_references_for_live_facts(self):
+        user = get_user_model().objects.create_user(username="research-subagent-reference-user")
+        task = ResearchTask.objects.create(
+            user=user,
+            title="子代理实时参考信息",
+            object_name="Example",
+            object_type="COMPANY",
+            status="SEARCHING",
+        )
+        conversation = ResearchConversation.objects.create(
+            task=task,
+            thread_id="thread-live-subagent-reference",
+            state_snapshot={},
+        )
+
+        content = {
+            "ok": True,
+            "url": "https://example.com/subagent-source",
+            "title": "Subagent source",
+            "citation_guidance": {
+                "entries": [
+                    {
+                        "cite_key": "WEB_FETCH_EXAMPLE_SUBAGENT",
+                        "source_platform": "example.com",
+                        "source_category": "web",
+                    }
+                ],
+            },
+            "content": "# Subagent source\n\nEvidence summary.",
+        }
+
+        with patch.object(research_runtime, "publish_task_update") as publish_update:
+            _record_event(
+                task.id,
+                1,
+                {
+                    "type": "subagent_tool_result",
+                    "name": "web_fetch",
+                    "id": "call_subagent_reference",
+                    "content": json.dumps(content),
+                    "citation_keys": ["web_fetch_example_subagent"],
+                    "subagent_id": "subagent-live-reference",
+                    "parent_tool_call_id": "call_task_reference",
+                    "subagent_type": "deep-search",
+                    "description": "采集子代理证据",
+                },
+            )
+
+        conversation.refresh_from_db()
+        citations = conversation.state_snapshot["citations"]
+        self.assertEqual(len(citations), 1)
+        self.assertEqual(citations[0]["cite_key"], "web_fetch_example_subagent")
+        self.assertEqual(citations[0]["url"], "https://example.com/subagent-source")
+        self.assertTrue(
+            ScrapedContent.objects.filter(
+                task=task,
+                source_url="https://example.com/subagent-source",
+                source_title="Subagent source",
             ).exists()
         )
         self.assertTrue(

@@ -22,7 +22,8 @@ class Citation(models.Model):
         help_text="引用角标编号 (如 [1], [2])"
     )
     source_url = models.URLField(
-        max_length=1024, help_text="原始来源链接"
+        max_length=1024, blank=True, default='',
+        help_text="原始来源链接（结构化数据来源可能没有 URL）"
     )
     source_title = models.CharField(
         max_length=512, help_text="来源标题"
@@ -30,6 +31,10 @@ class Citation(models.Model):
     cited_text_snippet = models.TextField(
         null=True, blank=True,
         help_text="报告中引用的文本片段"
+    )
+    reproduction_code = models.TextField(
+        null=True, blank=True,
+        help_text="复现代码（适用于 akshare 等结构化数据来源）"
     )
 
     class Meta:

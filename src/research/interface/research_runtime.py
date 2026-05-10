@@ -583,10 +583,7 @@ def _mark_matching_tool_call_completed(task_id: int, run_number: int, event: dic
 
 
 def _persist_event_citations(task: ResearchTask, event: dict[str, Any]) -> int:
-    citations = event.get("citations")
-    if not isinstance(citations, list):
-        return 0
-    new_citations = [json_safe(item) for item in citations if isinstance(item, dict)]
+    new_citations = _event_citations(event)
     if not new_citations:
         return 0
 
@@ -603,6 +600,88 @@ def _persist_event_citations(task: ResearchTask, event: dict[str, Any]) -> int:
     conversation.save(update_fields=["state_snapshot", "updated_at"])
     _sync_scraped_contents(task, state_snapshot["citations"])
     return len(state_snapshot["citations"])
+
+
+def _event_citations(event: dict[str, Any]) -> list[dict[str, Any]]:
+    citations = event.get("citations")
+    if isinstance(citations, list):
+        direct = [
+            json_safe(item)
+            for item in citations
+            if isinstance(item, dict) and _citation_identity(item)
+        ]
+        if direct:
+            return direct
+    return _citations_from_tool_content(event)
+
+
+def _citations_from_tool_content(event: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = _tool_content_payload(event.get("content"))
+    if not payload:
+        return []
+
+    citations = payload.get("citations")
+    if isinstance(citations, list):
+        direct = [
+            json_safe(item)
+            for item in citations
+            if isinstance(item, dict) and _citation_identity(item)
+        ]
+        if direct:
+            return direct
+
+    guidance = payload.get("citation_guidance")
+    entries = guidance.get("entries") if isinstance(guidance, dict) else None
+    if not isinstance(entries, list):
+        return []
+
+    url = str(payload.get("url") or payload.get("source_url") or payload.get("canonical_url") or "").strip()
+    canonical_url = str(payload.get("canonical_url") or "").strip()
+    fallback_title = str(payload.get("title") or payload.get("source_title") or "").strip()
+    source_platform = str(payload.get("source_platform") or "").strip()
+    tool_name = str(event.get("name") or payload.get("tool_name") or "").strip()
+    summary = content_to_text(payload.get("content") or payload.get("summary") or "")[:400]
+
+    normalized: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        cite_key = str(entry.get("cite_key", "") or "").strip().lower()
+        if not cite_key:
+            continue
+        item = {**entry, "cite_key": cite_key}
+        item.setdefault("title", fallback_title or cite_key)
+        if url:
+            item.setdefault("url", url)
+        if canonical_url:
+            item.setdefault("canonical_url", canonical_url)
+        if source_platform:
+            item.setdefault("source_platform", source_platform)
+        if tool_name:
+            item.setdefault("tool_name", tool_name)
+        if summary:
+            item.setdefault("summary", summary)
+        normalized.append(json_safe(item))
+    return normalized
+
+
+def _citation_identity(item: dict[str, Any]) -> str:
+    return str(item.get("cite_key") or item.get("url") or "").strip()
+
+
+def _tool_content_payload(content: Any) -> dict[str, Any] | None:
+    if isinstance(content, dict):
+        return content
+    if not isinstance(content, str):
+        return None
+    text = content.strip()
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _merge_citation_snapshots(existing: object, new: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -629,6 +708,16 @@ def _merge_citation_snapshots(existing: object, new: list[dict[str, Any]]) -> li
     return [merged[key] for key in order]
 
 
+def _subagent_detail_extra(event: dict[str, Any]) -> dict[str, Any]:
+    """Extract subagent linking fields from a subagent event."""
+    extra: dict[str, Any] = {}
+    for key in ("subagent_id", "parent_tool_call_id", "subagent_type", "description"):
+        value = event.get(key)
+        if value is not None and str(value).strip():
+            extra[key] = str(value).strip()
+    return extra
+
+
 def _event_to_step(
     event: dict[str, Any],
     run_number: int,
@@ -645,6 +734,7 @@ def _event_to_step(
                 "message": content_to_text(event.get("content")),
                 "run_number": run_number,
                 "event_type": event_type,
+                **_subagent_detail_extra(event),
             },
         )
     if event_type in {"tool_call", "subagent_tool_call"}:
@@ -656,6 +746,7 @@ def _event_to_step(
                 "id": str(event.get("id", "") or ""),
                 "run_number": run_number,
                 "event_type": event_type,
+                **_subagent_detail_extra(event),
             },
         )
     if event_type in {"tool_result", "subagent_tool_result"}:
@@ -668,6 +759,7 @@ def _event_to_step(
                 "id": str(event.get("id", "") or ""),
                 "run_number": run_number,
                 "event_type": event_type,
+                **_subagent_detail_extra(event),
             },
         )
     report_event = extract_presented_report_event(event)
@@ -704,6 +796,7 @@ def _event_to_step(
                 "message": content_to_text(event.get("content")),
                 "run_number": run_number,
                 "event_type": event_type,
+                **_subagent_detail_extra(event),
             },
         )
     if event_type == "subagent_start":
@@ -714,6 +807,7 @@ def _event_to_step(
                 "description": content_to_text(event.get("description")),
                 "run_number": run_number,
                 "event_type": event_type,
+                **_subagent_detail_extra(event),
             },
         )
     if event_type == "subagent_complete":
@@ -724,6 +818,7 @@ def _event_to_step(
                 "message": content_to_text(event.get("message")),
                 "run_number": run_number,
                 "event_type": event_type,
+                **_subagent_detail_extra(event),
             },
         )
     return (
@@ -1243,8 +1338,7 @@ def _create_report(
     for index, item in enumerate(citations, start=1):
         url = str(item.get("url", "") or "").strip()
         title = str(item.get("title", "") or "").strip() or f"来源 {index}"
-        if not url:
-            continue
+        reproduction_code = str(item.get("reproduction_code", "") or "").strip()
         citation_rows.append(
             Citation(
                 report=report,
@@ -1256,6 +1350,7 @@ def _create_report(
                     or item.get("note")
                     or item.get("howpublished")
                 )[:2000],
+                reproduction_code=reproduction_code or None,
             )
         )
     if citation_rows:

@@ -219,14 +219,25 @@ def _workflow_execution_id(detail: dict[str, Any]) -> str | None:
     return None
 
 
+_SUBAGENT_LINK_KEYS = ("subagent_id", "parent_tool_call_id", "subagent_type", "description")
+
+
 def _workflow_payload(detail: dict[str, Any]) -> dict[str, Any]:
     event_type = str(detail.get("event_type", "") or "").strip().lower()
     payload: dict[str, Any] = {"event_type": event_type} if event_type else {}
+    for key in _SUBAGENT_LINK_KEYS:
+        value = detail.get(key)
+        if value is not None and str(value).strip():
+            payload[key] = str(value).strip()
     if event_type in {"tool_call", "subagent_tool_call"}:
         payload["input"] = detail.get("args", {})
     elif event_type in {"tool_result", "subagent_tool_result"}:
         payload["output"] = detail.get("content")
     elif event_type in {"pre_tool_text", "subagent_pre_tool_text", "message", "subagent_message"}:
+        payload["text"] = content_to_text(detail.get("message", ""))
+    if event_type == "subagent_start":
+        payload["text"] = content_to_text(detail.get("description", ""))
+    elif event_type == "subagent_complete":
         payload["text"] = content_to_text(detail.get("message", ""))
     elif event_type == "report_presented":
         payload.update(
@@ -270,6 +281,93 @@ def _pair_workflow_nodes(nodes: list[dict[str, Any]]) -> None:
 
     for node in nodes:
         node.pop("_order_index", None)
+
+
+def _extract_subagent_workflows(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Group subagent nodes by subagent_id.
+
+    Mark extracted nodes with _is_subagent_node so the caller can filter them.
+    Each workflow's internal nodes are paired and collapsed into agent_steps.
+    """
+    workflows: dict[str, dict[str, Any]] = {}
+
+    for node in nodes:
+        payload = node.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        subagent_id = str(payload.get("subagent_id") or "").strip()
+        if not subagent_id:
+            continue
+
+        node["_is_subagent_node"] = True
+
+        if subagent_id not in workflows:
+            workflows[subagent_id] = {
+                "subagent_id": subagent_id,
+                "subagent_type": str(payload.get("subagent_type") or ""),
+                "description": str(payload.get("description") or ""),
+                "parent_tool_call_id": str(payload.get("parent_tool_call_id") or ""),
+                "nodes": [],
+            }
+        workflows[subagent_id]["nodes"].append(node)
+
+    for workflow in workflows.values():
+        _pair_workflow_nodes(workflow["nodes"])
+        workflow["nodes"] = _collapse_agent_step_nodes(workflow["nodes"])
+        # Filter out bookend events: subagent_start (description already in
+        # header) and subagent_complete (message already in task tool output).
+        # These have node_kind="subagent" and pass through collapsing as-is,
+        # and subagent_start is always "running" since nothing marks it done.
+        workflow["nodes"] = [
+            node for node in workflow["nodes"]
+            if node.get("event_type") not in {"subagent_start", "subagent_complete"}
+        ]
+        for node in workflow["nodes"]:
+            node.pop("_is_subagent_node", None)
+
+    return workflows
+
+
+def _attach_subagent_workflows(
+    nodes: list[dict[str, Any]],
+    workflows: dict[str, dict[str, Any]],
+) -> None:
+    """Attach subagent workflows to parent task tool_call nodes.
+
+    Matches subagent's parent_tool_call_id to the tool_call node's execution_id.
+    Multiple subagents may attach to the same task tool.
+    """
+    if not workflows:
+        return
+
+    # Group workflows by parent_tool_call_id
+    by_parent: dict[str, list[dict[str, Any]]] = {}
+    for workflow in workflows.values():
+        parent_id = workflow.get("parent_tool_call_id", "")
+        if not parent_id:
+            continue
+        by_parent.setdefault(parent_id, []).append(workflow)
+
+    for node in nodes:
+        if node.get("node_kind") != "tool_call":
+            continue
+        execution_id = node.get("execution_id", "")
+        if not execution_id or execution_id not in by_parent:
+            continue
+        payload = node.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+            node["payload"] = payload
+        attached = by_parent[execution_id]
+        payload["subagent_workflows"] = [
+            {
+                "subagent_id": wf["subagent_id"],
+                "subagent_type": wf["subagent_type"],
+                "description": wf["description"],
+                "nodes": wf["nodes"],
+            }
+            for wf in attached
+        ]
 
 
 def _tool_name_from_node(node: dict[str, Any]) -> str:
@@ -472,13 +570,35 @@ def _workflow_node_from_log(log: dict[str, Any], index: int) -> dict[str, Any]:
 
 def _workflow_tool_payload(call_node: dict[str, Any] | None, return_node: dict[str, Any] | None) -> dict[str, Any]:
     tool_name = _tool_name_from_node(call_node or return_node or {})
+    normalized_tool = (tool_name or "").strip()
     status = (return_node or call_node or {}).get("node_status") or "running"
     input_payload = ((call_node or {}).get("payload") or {}).get("input")
     output_payload = ((return_node or {}).get("payload") or {}).get("output")
-    display_name, status_text = _tool_display(tool_name, status, input_payload, output_payload)
-    is_report_tool = _is_report_tool_name(tool_name, input_payload, output_payload)
+    display_name, status_text = _tool_display(normalized_tool, status, input_payload, output_payload)
+    is_report_tool = _is_report_tool_name(normalized_tool, input_payload, output_payload)
+
+    # Carry subagent workflows from the call node
+    subagent_workflows = (call_node or {}).get("payload", {}).get("subagent_workflows")
+    if isinstance(subagent_workflows, list) and subagent_workflows:
+        # Enrich display from the first subagent's latest status
+        first_sa = subagent_workflows[0]
+        sa_desc = str(first_sa.get("description") or "").strip()
+        if sa_desc:
+            display_name = sa_desc
+        sa_nodes = first_sa.get("nodes") or []
+        if sa_nodes:
+            latest = sa_nodes[-1]
+            latest_summary = latest.get("summary") or latest.get("description") or ""
+            if latest_summary:
+                status_text = latest_summary
+    elif normalized_tool == "task" and isinstance(output_payload, str):
+        # Fallback: use first line of task output as status
+        first_line = output_payload.strip().split("\n")[0].strip()
+        if first_line:
+            status_text = first_line[:120]
+
     payload = {
-        "tool_name": tool_name,
+        "tool_name": normalized_tool,
         "display_name": display_name,
         "execution_id": (call_node or return_node or {}).get("execution_id"),
         "status": status,
@@ -489,6 +609,7 @@ def _workflow_tool_payload(call_node: dict[str, Any] | None, return_node: dict[s
         "report_url": "/report" if is_report_tool else "",
         "started_at": (call_node or {}).get("updated_at"),
         "finished_at": (return_node or {}).get("updated_at"),
+        "subagent_workflows": subagent_workflows if isinstance(subagent_workflows, list) and subagent_workflows else None,
     }
     source_ids = [
         str(node.get("node_id"))
@@ -1069,6 +1190,9 @@ def task_steps(request: HttpRequest, task_id: int):
     report_payload = _report_payload_for_task(task)
     logs = [log for log in get_task_step_logs(task_id, request.user.id) if not _is_hidden_workflow_log(log)]
     raw_nodes = [_workflow_node_from_log(log, index) for index, log in enumerate(logs)]
+    subagent_workflows = _extract_subagent_workflows(raw_nodes)
+    _attach_subagent_workflows(raw_nodes, subagent_workflows)
+    raw_nodes = [n for n in raw_nodes if not n.get("_is_subagent_node")]
     _pair_workflow_nodes(raw_nodes)
     nodes = _collapse_agent_step_nodes(raw_nodes)
     nodes = _split_report_message_nodes(nodes, report_payload)
