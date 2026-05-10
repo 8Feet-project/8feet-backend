@@ -67,7 +67,7 @@ class ReportCitationDetailApiTests(TestCase):
             '<｜DSML｜invoke name="write_file">\n'
             '<｜DSML｜parameter name="path" string="true">/mnt/user-data/outputs/research_report.md</｜DSML｜parameter>\n'
             '<｜DSML｜parameter name="content" string="true"># 报告\n\n'
-            '结论来自来源[@example_source]。'
+            '结论来自来源[@Example_Source]。'
         )
         self.report.save(update_fields=["content_markdown"])
         ResearchConversation.objects.create(
@@ -76,7 +76,7 @@ class ReportCitationDetailApiTests(TestCase):
             state_snapshot={
                 "citations": [
                     {
-                        "cite_key": "example_source",
+                        "cite_key": "EXAMPLE_SOURCE",
                         "url": self.citation.source_url,
                         "title": self.citation.source_title,
                         "source_platform": "example.com",

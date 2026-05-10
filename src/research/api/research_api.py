@@ -799,7 +799,7 @@ def _task_reference_items(task: ResearchTask) -> list[dict[str, Any]]:
     for index, citation in enumerate(citations, start=1):
         if not isinstance(citation, dict):
             continue
-        cite_key = str(citation.get("cite_key", "") or "").strip()
+        cite_key = str(citation.get("cite_key", "") or "").strip().lower()
         url = str(citation.get("url", "") or "").strip()
         identity = cite_key or url
         if not identity or identity in seen_keys:

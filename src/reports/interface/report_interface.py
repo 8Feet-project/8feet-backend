@@ -31,6 +31,10 @@ AUTO_REFERENCES_RE = re.compile(
 CITE_KEY_RE = re.compile(r"\[@([A-Za-z0-9_.:-]+)\]")
 
 
+def _normalize_cite_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
 def get_report_detail(report_id: int, report_mode: str = 'full') -> Optional[dict]:
     """获取报告详情"""
     report = Report.objects.filter(pk=report_id).first()
@@ -282,7 +286,7 @@ def cite_keys_from_markdown(markdown_text: str) -> list[str]:
     seen: set[str] = set()
     keys: list[str] = []
     for match in CITE_KEY_RE.finditer(markdown_text or ""):
-        key = match.group(1)
+        key = _normalize_cite_key(match.group(1))
         if key in seen:
             continue
         seen.add(key)
@@ -301,17 +305,19 @@ def _enrich_citations_from_state(report: Report, citations: list[dict[str, Any]]
             ]
         )
     )
-    used_key_by_url = {
-        str(item.get("url", "") or "").strip(): str(item.get("cite_key", "") or "").strip()
-        for item in state_citations.values()
-        if str(item.get("url", "") or "").strip() and str(item.get("cite_key", "") or "").strip() in used_keys
-    }
+    used_key_set = set(used_keys)
+    used_key_by_url = {}
+    for item in state_citations.values():
+        url = str(item.get("url", "") or "").strip()
+        cite_key = _normalize_cite_key(item.get("cite_key"))
+        if url and cite_key and cite_key in used_key_set:
+            used_key_by_url[url] = cite_key
 
     enriched: list[dict[str, Any]] = []
     for item in citations:
         url = str(item.get("source_url", "") or "").strip()
         state_item = state_citations.get(url, {})
-        cite_key = str(state_item.get("cite_key") or used_key_by_url.get(url) or "").strip()
+        cite_key = _normalize_cite_key(state_item.get("cite_key") or used_key_by_url.get(url))
         enriched.append(
             {
                 **item,
@@ -353,6 +359,7 @@ def _bibtex_escape(value: Any) -> str:
 
 
 def _render_bibtex_entry(cite_key: str, citation: dict[str, Any], state_item: dict[str, Any]) -> str:
+    cite_key = _normalize_cite_key(cite_key)
     title = state_item.get("title") or citation.get("source_title") or cite_key
     fields = [
         ("title", title),
