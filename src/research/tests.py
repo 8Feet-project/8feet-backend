@@ -3,7 +3,8 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 from research.interface import research_runtime
@@ -34,10 +35,12 @@ from research.interface.prompt_contracts import (
 )
 from research.interface.research_runtime import (
     _build_execution_constraints,
+    _record_event,
     build_initial_prompt,
     build_research_system_message,
     _resolve_max_turns,
 )
+from research.models import ResearchConversation, ResearchTask, ScrapedContent
 from research.interface.research_interface import infer_object_type
 from research.api.research_api import (
     _agent_step_status,
@@ -210,6 +213,61 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
             self.assertIn("事实性断言", text)
             self.assertIn("[@cite_key]", text)
             self.assertIn("不要编造 citation key", text)
+
+
+class ResearchRealtimeReferenceTests(TestCase):
+    def test_tool_result_event_persists_references_for_live_facts(self):
+        user = get_user_model().objects.create_user(username="research-reference-user")
+        task = ResearchTask.objects.create(
+            user=user,
+            title="实时参考信息",
+            object_name="Caixin Global",
+            object_type="COMPANY",
+            status="SEARCHING",
+        )
+        conversation = ResearchConversation.objects.create(
+            task=task,
+            thread_id="thread-live-reference",
+            state_snapshot={},
+        )
+
+        with patch.object(research_runtime, "publish_task_update") as publish_update:
+            _record_event(
+                task.id,
+                1,
+                {
+                    "type": "tool_result",
+                    "name": "web_fetch",
+                    "id": "call_live_reference",
+                    "content": "{}",
+                    "citation_keys": ["web_fetch_caixinglobal_com_abc"],
+                    "citations": [
+                        {
+                            "cite_key": "WEB_FETCH_CAIXINGLOBAL_COM_ABC",
+                            "title": "Caixin Global article",
+                            "url": "https://www.caixinglobal.com/article",
+                            "source_platform": "caixinglobal.com",
+                            "source_category": "news",
+                            "summary": "article summary",
+                        }
+                    ],
+                },
+            )
+
+        conversation.refresh_from_db()
+        citations = conversation.state_snapshot["citations"]
+        self.assertEqual(len(citations), 1)
+        self.assertEqual(citations[0]["cite_key"], "web_fetch_caixinglobal_com_abc")
+        self.assertTrue(
+            ScrapedContent.objects.filter(
+                task=task,
+                source_url="https://www.caixinglobal.com/article",
+                source_title="Caixin Global article",
+            ).exists()
+        )
+        self.assertTrue(
+            any(call.args[1] == "references_changed" for call in publish_update.call_args_list)
+        )
 
 
 class CrossValidationRuntimeTests(SimpleTestCase):

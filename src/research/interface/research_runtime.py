@@ -535,6 +535,7 @@ def _record_event(task_id: int, run_number: int, event: dict[str, Any]) -> None:
         detail=detail,
     )
 
+    reference_count = _persist_event_citations(task, event)
     _persist_presented_report_event(task, event)
 
     task_status, progress = _progress_from_event(task.progress, event)
@@ -549,8 +550,17 @@ def _record_event(task_id: int, run_number: int, event: dict[str, Any]) -> None:
         {
             "status": task_status,
             "progress": progress,
+            "reference_count": reference_count,
         },
     )
+    if reference_count:
+        publish_task_update(
+            task_id,
+            "references_changed",
+            {
+                "reference_count": reference_count,
+            },
+        )
 
 
 def _mark_matching_tool_call_completed(task_id: int, run_number: int, event: dict[str, Any]) -> None:
@@ -593,6 +603,53 @@ def _mark_matching_tool_call_completed(task_id: int, run_number: int, event: dic
     call_log.detail = detail
     call_log.step_status = "COMPLETED"
     call_log.save(update_fields=["step_status", "detail"])
+
+
+def _persist_event_citations(task: ResearchTask, event: dict[str, Any]) -> int:
+    citations = event.get("citations")
+    if not isinstance(citations, list):
+        return 0
+    new_citations = [json_safe(item) for item in citations if isinstance(item, dict)]
+    if not new_citations:
+        return 0
+
+    conversation = ResearchConversation.objects.filter(task_id=task.id).first()
+    if conversation is None:
+        return 0
+
+    state_snapshot = dict(conversation.state_snapshot or {})
+    state_snapshot["citations"] = _merge_citation_snapshots(
+        state_snapshot.get("citations"),
+        new_citations,
+    )
+    conversation.state_snapshot = state_snapshot
+    conversation.save(update_fields=["state_snapshot", "updated_at"])
+    _sync_scraped_contents(task, state_snapshot["citations"])
+    return len(state_snapshot["citations"])
+
+
+def _merge_citation_snapshots(existing: object, new: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+
+    for item in [*(existing if isinstance(existing, list) else []), *new]:
+        if not isinstance(item, dict):
+            continue
+        cite_key = str(item.get("cite_key", "") or "").strip().lower()
+        url = str(item.get("url", "") or "").strip()
+        identity = cite_key or url
+        if not identity:
+            continue
+        normalized_item = {**item}
+        if cite_key:
+            normalized_item["cite_key"] = cite_key
+        if identity not in merged:
+            order.append(identity)
+            merged[identity] = normalized_item
+            continue
+        merged[identity] = {**merged[identity], **normalized_item}
+
+    return [merged[key] for key in order]
 
 
 def _event_to_step(
