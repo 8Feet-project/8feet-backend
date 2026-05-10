@@ -131,6 +131,10 @@ def _resolve_env_model_spec(model_name: str) -> CrossModelSpec:
             "api_key": api_key,
             "base_url": base_url,
             "debug_provider_http": _env_bool("EFEET_DEBUG_PROVIDER_HTTP", False),
+            "streaming": _env_bool_first(
+                ("EFEET_MODEL_STREAM", "MODEL_STREAM", "EFEET_MODEL_STREAMING", "MODEL_STREAMING"),
+                True,
+            ),
         },
         llm_config_id=None,
     )
@@ -143,7 +147,8 @@ def _create_model(spec: CrossModelSpec):
         model=str(spec.runtime_config["model"]),
         api_key=str(spec.runtime_config["api_key"]),
         base_url=str(spec.runtime_config["base_url"]),
-        debug_provider_http=bool(spec.runtime_config.get("debug_provider_http", False)),
+        debug_provider_http=_coerce_bool_value(spec.runtime_config.get("debug_provider_http"), False),
+        streaming=_coerce_bool_value(spec.runtime_config.get("streaming"), True),
     )
 
 
@@ -180,3 +185,19 @@ def _env_bool(name: str, default: bool) -> bool:
     if not value:
         return default
     return value in {"1", "true", "yes", "on"}
+
+
+def _coerce_bool_value(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_bool_first(names: tuple[str, ...], default: bool) -> bool:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value.lower() in {"1", "true", "yes", "on"}
+    return default

@@ -4,6 +4,7 @@ from django.test import SimpleTestCase
 
 from llm_manager.interface.llm_interface import (
     create_or_update_llm_config,
+    get_provider_runtime_config,
     normalize_provider_base_url,
 )
 
@@ -51,3 +52,37 @@ class CreateOrUpdateLLMConfigTests(SimpleTestCase):
         _, kwargs = objects.create.call_args
         self.assertIs(kwargs["is_enabled"], True)
         self.assertIs(kwargs["is_online"], False)
+
+
+class ProviderRuntimeConfigTests(SimpleTestCase):
+    def test_runtime_config_defaults_to_streaming_enabled(self):
+        config = MagicMock(
+            name="gpt-5.4",
+            provider="OpenAI",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="secret",
+            params={},
+        )
+        config.name = "gpt-5.4"
+
+        success, message, runtime = get_provider_runtime_config(config)
+
+        self.assertTrue(success)
+        self.assertIsNone(message)
+        self.assertIs(runtime["streaming"], True)
+
+    def test_runtime_config_allows_stream_flag_to_disable_streaming(self):
+        config = MagicMock(
+            name="gpt-5.4",
+            provider="OpenAI",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="secret",
+            params={"stream": "false", "debug_provider_http": "false"},
+        )
+        config.name = "gpt-5.4"
+
+        success, _message, runtime = get_provider_runtime_config(config)
+
+        self.assertTrue(success)
+        self.assertIs(runtime["streaming"], False)
+        self.assertIs(runtime["debug_provider_http"], False)

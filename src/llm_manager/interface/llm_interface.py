@@ -42,6 +42,13 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _coerce_bool_param(params: dict, keys: tuple[str, ...], default: bool) -> bool:
+    for key in keys:
+        if key in params and params.get(key) is not None:
+            return _coerce_bool(params.get(key), default)
+    return default
+
+
 def normalize_object_type(value: str | None) -> str:
     text = str(value or "").strip()
     if not text:
@@ -638,7 +645,8 @@ def get_provider_runtime_config(
             "model": model_name,
             "api_key": api_key,
             "base_url": base_url,
-            "debug_provider_http": bool(params.get("debug_provider_http", False)),
+            "debug_provider_http": _coerce_bool_param(params, ("debug_provider_http",), False),
+            "streaming": _coerce_bool_param(params, ("stream", "streaming"), True),
         },
     )
 

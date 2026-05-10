@@ -414,6 +414,7 @@ def _build_task_model(task: ResearchTask):
                 api_key=runtime_config["api_key"],
                 base_url=runtime_config["base_url"],
                 debug_provider_http=runtime_config["debug_provider_http"],
+                streaming=bool(runtime_config.get("streaming", True)),
             ),
             config,
         )
