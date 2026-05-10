@@ -41,8 +41,13 @@ from research.interface.research_runtime import (
 from research.interface.research_interface import infer_object_type
 from research.api.research_api import (
     _agent_step_status,
+    _collapse_agent_step_nodes,
+    _dsml_tool_names,
+    _dsml_report_tool_names,
+    _enrich_report_links,
     _is_hidden_workflow_log,
     _progress_model,
+    _split_report_message_nodes,
     _task_reference_items,
     _tool_display,
     _workflow_node_from_log,
@@ -260,16 +265,42 @@ class ResearchProgressModelTests(SimpleTestCase):
         self.assertEqual(model["percent"], 75)
 
     def test_workflow_hides_shell_step_logs(self):
-        for step_name in ("开始执行调研", "生成回答", "调研完成"):
-            with self.subTest(step_name=step_name):
-                self.assertTrue(
-                    _is_hidden_workflow_log(
-                        {
-                            "step_name": step_name,
-                            "detail": {"event_type": "message"},
-                        }
-                    )
-                )
+        self.assertTrue(
+            _is_hidden_workflow_log(
+                {
+                    "step_name": "开始执行调研",
+                    "detail": {"event_type": "message"},
+                }
+            )
+        )
+        self.assertTrue(
+            _is_hidden_workflow_log(
+                {
+                    "step_name": "调研完成",
+                    "detail": {
+                        "event_type": "message",
+                        "message": "<｜DSML｜tool_calls><｜DSML｜invoke name=\"write_file\"></｜DSML｜invoke>",
+                    },
+                }
+            )
+        )
+
+        self.assertFalse(
+            _is_hidden_workflow_log(
+                {
+                    "step_name": "生成回答",
+                    "detail": {"event_type": "message", "message": "报告已生成。"},
+                }
+            )
+        )
+        self.assertFalse(
+            _is_hidden_workflow_log(
+                {
+                    "step_name": "调研完成",
+                    "detail": {"message": "报告已生成并展示。"},
+                }
+            )
+        )
 
         self.assertFalse(
             _is_hidden_workflow_log(
@@ -307,6 +338,128 @@ class ResearchProgressModelTests(SimpleTestCase):
         )
 
         self.assertEqual(status, "completed")
+
+    def test_dsml_report_message_becomes_light_agent_step(self):
+        message = (
+            "我要生成调研报告。\n\n"
+            "<｜DSML｜tool_calls>\n"
+            "<｜DSML｜invoke name=\"write_file\">"
+            "<｜DSML｜parameter name=\"path\" string=\"true\">/mnt/user-data/outputs/research_report.md</｜DSML｜parameter>"
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
+        )
+        raw_nodes = [
+            _workflow_node_from_log(
+                {
+                    "id": 21,
+                    "step_name": "生成回答",
+                    "step_status": "RUNNING",
+                    "detail": {"event_type": "message", "message": message},
+                },
+                0,
+            )
+        ]
+
+        collapsed = _collapse_agent_step_nodes(raw_nodes)
+        expanded = _split_report_message_nodes(
+            collapsed,
+            {"report_id": "5", "report_title": "报告", "report_url": "/report?task_id=6&report_id=5"},
+        )
+
+        self.assertEqual(len(expanded), 1)
+        node = expanded[0]
+        self.assertEqual(node["node_kind"], "agent_step")
+        self.assertEqual(node["node_status"], "completed")
+        self.assertEqual(node["summary"], "我要生成调研报告。")
+        self.assertEqual(node["payload"]["report_url"], "/report?task_id=6&report_id=5")
+        self.assertEqual(node["payload"]["tools"][0]["tool_name"], "write_file")
+        self.assertFalse(node["payload"]["tools"][0]["hide_payload"])
+        self.assertEqual(node["payload"]["tools"][0]["report_url"], "")
+
+    def test_report_generation_and_summary_remain_separate_nodes(self):
+        write_message = (
+            "我要生成调研报告。"
+            "<｜DSML｜tool_calls><｜DSML｜invoke name=\"write_file\"></｜DSML｜invoke></｜DSML｜tool_calls>"
+        )
+        present_message = (
+            "我要展示调研报告。"
+            "<｜DSML｜tool_calls><｜DSML｜invoke name=\"present_report\"></｜DSML｜invoke></｜DSML｜tool_calls>"
+        )
+        summary_message = "报告已生成并展示，可进入报告页查看。"
+        raw_nodes = [
+            _workflow_node_from_log(
+                {
+                    "id": 31,
+                    "step_name": "生成回答",
+                    "step_status": "RUNNING",
+                    "detail": {"event_type": "message", "message": write_message},
+                },
+                0,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 32,
+                    "step_name": "生成回答",
+                    "step_status": "RUNNING",
+                    "detail": {"event_type": "message", "message": present_message},
+                },
+                1,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 33,
+                    "step_name": "生成回答",
+                    "step_status": "RUNNING",
+                    "detail": {"event_type": "message", "message": summary_message},
+                },
+                2,
+            ),
+        ]
+
+        nodes = _split_report_message_nodes(
+            _collapse_agent_step_nodes(raw_nodes),
+            {"report_id": "8", "report_title": "报告", "report_url": "/report?task_id=9&report_id=8"},
+        )
+        _enrich_report_links(nodes, {"report_id": "8", "report_title": "报告", "report_url": "/report?task_id=9&report_id=8"})
+
+        self.assertEqual([node["node_kind"] for node in nodes], ["agent_step", "agent_step", "llm_message"])
+        self.assertEqual([node["summary"] for node in nodes], ["我要生成调研报告。", "我要展示调研报告。", summary_message])
+        self.assertEqual(nodes[0]["payload"]["tools"][0]["tool_name"], "write_file")
+        self.assertEqual(nodes[1]["payload"]["tools"][0]["tool_name"], "present_report")
+        self.assertFalse(nodes[0]["payload"]["tools"][0]["hide_payload"])
+        self.assertTrue(nodes[1]["payload"]["tools"][0]["hide_payload"])
+        self.assertEqual(nodes[1]["payload"]["report_url"], "/report?task_id=9&report_id=8")
+        self.assertNotIn("tools", nodes[2]["payload"])
+
+    def test_dsml_tool_names_extracts_multiple_calls(self):
+        names = _dsml_tool_names(
+            "<｜DSML｜tool_calls>"
+            "<｜DSML｜invoke name=\"write_file\"></｜DSML｜invoke>"
+            "<｜DSML｜invoke name=\"present_report\"></｜DSML｜invoke>"
+            "</｜DSML｜tool_calls>"
+        )
+
+        self.assertEqual(names, ["write_file", "present_report"])
+
+    def test_dsml_report_tool_names_requires_report_context_for_write_file(self):
+        self.assertEqual(
+            _dsml_report_tool_names(
+                "<｜DSML｜tool_calls>"
+                "<｜DSML｜invoke name=\"write_file\">"
+                "/mnt/user-data/outputs/research_report.md"
+                "</｜DSML｜invoke>"
+            ),
+            [],
+        )
+        self.assertEqual(
+            _dsml_report_tool_names(
+                "<｜DSML｜tool_calls>"
+                "<｜DSML｜invoke name=\"present_report\">"
+                "/mnt/user-data/outputs/research_report.md"
+                "</｜DSML｜invoke>"
+            ),
+            ["present_report"],
+        )
 
     def test_task_reference_items_uses_state_citations(self):
         task = SimpleNamespace(

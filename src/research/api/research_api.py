@@ -3,6 +3,7 @@
 映射需求: FR-JSDY-0001 ~ FR-JSDY-0006
 """
 import json
+import re
 from typing import Any
 
 from django.http import HttpRequest
@@ -60,9 +61,21 @@ _STAGE_TEMPLATE = [
 
 _HIDDEN_WORKFLOW_STEP_NAMES = {
     "开始执行调研",
-    "生成回答",
     "调研完成",
 }
+
+_REPORT_EVENT_TYPES = {
+    "report_presented",
+    "files_presented",
+}
+
+_REPORT_TOOL_NAMES = {
+    "present_report",
+    "present_files",
+}
+
+_DSML_TOOL_CALLS_MARKER = "<｜DSML｜tool_calls>"
+_DSML_INVOKE_RE = re.compile(r'<｜DSML｜invoke\s+name="([^"]+)">')
 
 
 def _progress_model(task: ResearchTask) -> dict[str, Any]:
@@ -183,6 +196,8 @@ def _request_data(request: HttpRequest) -> dict:
 
 def _workflow_node_kind(event_type: str) -> str:
     normalized = (event_type or "").strip().lower()
+    if normalized in _REPORT_EVENT_TYPES:
+        return "report_generation"
     if normalized in {"tool_call", "subagent_tool_call"}:
         return "tool_call"
     if normalized in {"tool_result", "subagent_tool_result"}:
@@ -213,6 +228,19 @@ def _workflow_payload(detail: dict[str, Any]) -> dict[str, Any]:
         payload["output"] = detail.get("content")
     elif event_type in {"pre_tool_text", "subagent_pre_tool_text", "message", "subagent_message"}:
         payload["text"] = content_to_text(detail.get("message", ""))
+    elif event_type == "report_presented":
+        payload.update(
+            {
+                "path": detail.get("path", ""),
+                "brief_path": detail.get("brief_path", ""),
+                "content_length": detail.get("content_length"),
+                "brief_content_length": detail.get("brief_content_length"),
+                "generated_reference_count": detail.get("generated_reference_count"),
+                "citation_keys": detail.get("citation_keys", []),
+            }
+        )
+    elif event_type == "files_presented":
+        payload["paths"] = detail.get("paths", [])
     return payload
 
 
@@ -252,22 +280,187 @@ def _tool_name_from_node(node: dict[str, Any]) -> str:
     return name or "未知工具"
 
 
+def _strip_dsml_tool_markup(text: Any) -> str:
+    raw = content_to_text(text).strip()
+    if not raw:
+        return ""
+    if _DSML_TOOL_CALLS_MARKER in raw:
+        raw = raw.split(_DSML_TOOL_CALLS_MARKER, 1)[0]
+    return " ".join(raw.split()).strip()
+
+
+def _dsml_tool_names(text: Any) -> list[str]:
+    raw = content_to_text(text)
+    if _DSML_TOOL_CALLS_MARKER not in raw:
+        return []
+    return [match.group(1).strip() for match in _DSML_INVOKE_RE.finditer(raw) if match.group(1).strip()]
+
+
+def _dsml_report_tool_names(text: Any) -> list[str]:
+    return [name for name in _dsml_tool_names(text) if name in _REPORT_TOOL_NAMES]
+
+
+def _is_report_tool_name(tool_name: str, input_payload: Any = None, output_payload: Any = None) -> bool:
+    normalized = (tool_name or "").strip()
+    return normalized in _REPORT_TOOL_NAMES
+
+
+def _report_url(task_id: Any, report_id: Any | None = None) -> str:
+    task_part = str(task_id)
+    report_part = str(report_id or "").strip()
+    return (
+        f"/report?task_id={task_part}&report_id={report_part}"
+        if report_part
+        else f"/report?task_id={task_part}"
+    )
+
+
+def _report_payload_for_task(task: ResearchTask | None) -> dict[str, Any]:
+    if task is None:
+        return {"report_id": "", "report_title": "", "report_url": ""}
+    report = task.reports.filter(is_latest=True).first()
+    payload = {
+        "report_id": str(report.id) if report else "",
+        "report_title": report.title if report else "",
+        "report_url": _report_url(task.id, report.id if report else None),
+    }
+    if report:
+        payload["report_created_at"] = report.created_at.isoformat()
+    return payload
+
+
+def _with_report_payload(payload: dict[str, Any], report_payload: dict[str, Any]) -> dict[str, Any]:
+    merged = {**payload}
+    for key in ("report_id", "report_title", "report_url", "report_created_at"):
+        value = report_payload.get(key)
+        if value not in (None, ""):
+            merged[key] = value
+    return merged
+
+
+def _message_node_display(detail: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    text = content_to_text(detail.get("message", ""))
+    clean_text = _strip_dsml_tool_markup(text)
+    tool_names = _dsml_tool_names(text)
+    report_tool_names = _dsml_report_tool_names(text)
+    if tool_names:
+        if any(name in {"present_report", "present_files"} for name in tool_names):
+            title = "展示调研报告"
+            fallback = "正在展示调研报告。"
+        else:
+            title = "准备工具调用"
+            fallback = "正在准备工具调用。"
+        summary = clean_text or fallback
+        return title, summary, {
+            "text": summary,
+            "tool_names": tool_names,
+            "report_tool_names": report_tool_names,
+            "hide_tool_payload": bool(report_tool_names),
+        }
+
+    summary = clean_text or "本轮回复已生成。"
+    return "总结调研结果", summary, {"text": summary}
+
+
+def _is_dsml_tool_message(node: dict[str, Any]) -> bool:
+    if node.get("node_kind") != "llm_message":
+        return False
+    payload = node.get("payload") if isinstance(node.get("payload"), dict) else {}
+    tool_names = payload.get("tool_names")
+    return isinstance(tool_names, list) and bool(tool_names)
+
+
+def _is_report_summary_message(node: dict[str, Any], report_payload: dict[str, Any]) -> bool:
+    if node.get("node_kind") != "llm_message" or not report_payload.get("report_url"):
+        return False
+    text = str(((node.get("payload") or {}).get("text") if isinstance(node.get("payload"), dict) else "") or node.get("summary") or "").strip()
+    if not text:
+        return False
+    return "报告" in text and any(marker in text for marker in ("已生成", "已展示", "查看", "完成", "提交"))
+
+
+def _workflow_tool_from_dsml_message(node: dict[str, Any], tool_name: str, report_payload: dict[str, Any]) -> dict[str, Any]:
+    hide_payload = _is_report_tool_name(tool_name)
+    display_name, status_text = _tool_display(tool_name, node.get("node_status") or "completed", {}, {})
+    return {
+        "tool_name": tool_name,
+        "display_name": display_name,
+        "execution_id": node.get("execution_id"),
+        "status": node.get("node_status") or "completed",
+        "status_text": status_text,
+        "input": None,
+        "output": None,
+        "hide_payload": hide_payload,
+        "report_url": report_payload.get("report_url") if hide_payload else "",
+        "started_at": node.get("updated_at"),
+        "finished_at": node.get("updated_at"),
+        "source_node_ids": [str(node["node_id"])] if node.get("node_id") is not None else [],
+    }
+
+
+def _enrich_report_links(nodes: list[dict[str, Any]], report_payload: dict[str, Any]) -> None:
+    for node in nodes:
+        payload = node.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+            node["payload"] = payload
+
+        if node.get("node_kind") == "report_generation" or _is_report_summary_message(node, report_payload):
+            node["payload"] = _with_report_payload(payload, report_payload)
+            node["payload"]["hide_tool_payload"] = node.get("node_kind") == "report_generation"
+
+        tools = node["payload"].get("tools")
+        if isinstance(tools, list):
+            for tool in tools:
+                if not isinstance(tool, dict):
+                    continue
+                if _is_report_tool_name(str(tool.get("tool_name", "")), tool.get("input"), tool.get("output")):
+                    tool["hide_payload"] = True
+                    if report_payload.get("report_url"):
+                        tool["report_url"] = report_payload["report_url"]
+
+
 def _workflow_node_from_log(log: dict[str, Any], index: int) -> dict[str, Any]:
     detail = log.get("detail") if isinstance(log.get("detail"), dict) else {}
     event_type = str(detail.get("event_type", "") or "")
+    node_kind = _workflow_node_kind(event_type)
     node_id = str(log.get("id") or index + 1)
+    step_name = log.get("step_name") or log.get("name") or f"步骤 {index + 1}"
+    if not event_type and str(step_name).strip() == "调研完成" and content_to_text(detail.get("message", "")).strip():
+        node_kind = "llm_message"
     status = (log.get("step_status") or log.get("status") or "completed").lower()
     if status == "paused":
         status = "waiting_user"
-    if _workflow_node_kind(event_type) == "planning" and status == "running":
+    if node_kind == "planning" and status == "running":
         status = "completed"
+    payload = _workflow_payload(detail)
+    node_name = step_name
+    summary = None
+    description = str(log.get("detail") or "")
+    if node_kind == "llm_message":
+        node_name, summary, message_payload = _message_node_display(detail)
+        payload.update(message_payload)
+        description = summary
+    if node_kind == "report_generation":
+        node_name = "生成调研报告"
+        if event_type == "report_presented":
+            reference_count = payload.get("generated_reference_count")
+            summary = (
+                f"报告文件已生成，包含 {reference_count} 条参考信息。"
+                if reference_count not in (None, "")
+                else "报告文件已生成。"
+            )
+        else:
+            summary = "报告相关文件已生成。"
+        description = summary
     return {
         "node_id": node_id,
-        "node_name": log.get("step_name") or log.get("name") or f"步骤 {index + 1}",
+        "node_name": node_name,
         "node_status": status,
-        "description": str(log.get("detail") or ""),
-        "payload": _workflow_payload(detail),
-        "node_kind": _workflow_node_kind(event_type),
+        "description": description,
+        "summary": summary,
+        "payload": payload,
+        "node_kind": node_kind,
         "event_type": event_type or None,
         "execution_id": _workflow_execution_id(detail),
         "paired_node_id": None,
@@ -283,6 +476,7 @@ def _workflow_tool_payload(call_node: dict[str, Any] | None, return_node: dict[s
     input_payload = ((call_node or {}).get("payload") or {}).get("input")
     output_payload = ((return_node or {}).get("payload") or {}).get("output")
     display_name, status_text = _tool_display(tool_name, status, input_payload, output_payload)
+    is_report_tool = _is_report_tool_name(tool_name, input_payload, output_payload)
     payload = {
         "tool_name": tool_name,
         "display_name": display_name,
@@ -291,6 +485,8 @@ def _workflow_tool_payload(call_node: dict[str, Any] | None, return_node: dict[s
         "status_text": status_text,
         "input": input_payload,
         "output": output_payload,
+        "hide_payload": is_report_tool,
+        "report_url": "/report" if is_report_tool else "",
         "started_at": (call_node or {}).get("updated_at"),
         "finished_at": (return_node or {}).get("updated_at"),
     }
@@ -378,11 +574,18 @@ def _agent_step_status(nodes: list[dict[str, Any]]) -> str:
 
 def _is_hidden_workflow_log(log: dict[str, Any]) -> bool:
     step_name = str(log.get("step_name") or log.get("name") or "").strip()
-    if step_name in _HIDDEN_WORKFLOW_STEP_NAMES:
+    if step_name == "开始执行调研":
         return True
+    if step_name != "调研完成":
+        return False
     detail = log.get("detail") if isinstance(log.get("detail"), dict) else {}
-    event_type = str(detail.get("event_type", "") or "").strip().lower()
-    return event_type == "message" and step_name in {"生成回答", "调研完成"}
+    message = content_to_text(detail.get("message", ""))
+    stripped = _strip_dsml_tool_markup(message)
+    if _DSML_TOOL_CALLS_MARKER in message:
+        return True
+    if stripped.startswith("#") or "## " in stripped[:500]:
+        return True
+    return False
 
 
 def _agent_step_node(nodes: list[dict[str, Any]], order: int) -> dict[str, Any]:
@@ -468,6 +671,56 @@ def _collapse_agent_step_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, An
         index += 1
 
     return collapsed
+
+
+def _split_report_message_nodes(
+    nodes: list[dict[str, Any]],
+    report_payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    expanded: list[dict[str, Any]] = []
+
+    for node in nodes:
+        if not _is_dsml_tool_message(node):
+            expanded.append(node)
+            continue
+
+        payload = node.get("payload") if isinstance(node.get("payload"), dict) else {}
+        planning_text = str(payload.get("text") or node.get("summary") or node.get("description") or "").strip()
+        tool_names = [str(name) for name in payload.get("tool_names", []) if str(name)]
+        tools = [_workflow_tool_from_dsml_message(node, tool_name, report_payload) for tool_name in tool_names]
+        if any(tool.get("hide_payload") for tool in tools):
+            node_name = "展示调研报告"
+        else:
+            node_name = str(node.get("node_name") or "准备工具调用")
+        source_ids = payload.get("source_node_ids") if isinstance(payload.get("source_node_ids"), list) else []
+        source_ids = [str(item) for item in source_ids] or [str(node["node_id"])]
+        expanded.append(
+            {
+                **node,
+                "node_id": f"agent-step-report-{node['node_id']}",
+                "node_name": node_name,
+                "node_status": "completed" if node.get("node_status") == "running" else node.get("node_status", "completed"),
+                "description": planning_text,
+                "summary": planning_text,
+                "payload": _with_report_payload(
+                    {
+                        "planning": planning_text,
+                        "tools": tools,
+                        "source_node_ids": source_ids,
+                        "hide_tool_payload": False,
+                    },
+                    report_payload,
+                ),
+                "node_kind": "agent_step",
+                "event_type": "agent_step",
+                "execution_id": None,
+                "paired_node_id": None,
+                "can_intervene": False,
+                "metrics": [],
+            }
+        )
+
+    return expanded
 
 
 def _workflow_edges(nodes: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -809,10 +1062,17 @@ def task_steps(request: HttpRequest, task_id: int):
 
     [route]: GET /api/v1/research/tasks/{task_id}/workflow
     """
+    task = _get_user_task(task_id, request.user.id)
+    if not task:
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
+
+    report_payload = _report_payload_for_task(task)
     logs = [log for log in get_task_step_logs(task_id, request.user.id) if not _is_hidden_workflow_log(log)]
     raw_nodes = [_workflow_node_from_log(log, index) for index, log in enumerate(logs)]
     _pair_workflow_nodes(raw_nodes)
     nodes = _collapse_agent_step_nodes(raw_nodes)
+    nodes = _split_report_message_nodes(nodes, report_payload)
+    _enrich_report_links(nodes, report_payload)
     edges = _workflow_edges(nodes)
     _pair_workflow_nodes(nodes)
     current_raw_node = str(raw_nodes[-1]["node_id"]) if raw_nodes else ""
