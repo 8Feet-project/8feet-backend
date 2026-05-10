@@ -44,6 +44,7 @@ from research.api.research_api import (
     _is_hidden_workflow_log,
     _progress_model,
     _task_reference_items,
+    _tool_display,
     _workflow_node_from_log,
 )
 
@@ -337,6 +338,17 @@ class ResearchProgressModelTests(SimpleTestCase):
             references[0]["evidence_path"],
             "/mnt/user-data/workspace/evidence/web_fetch_example.md",
         )
+
+    def test_tool_display_localizes_web_search_status(self):
+        display_name, status_text = _tool_display(
+            "web_search",
+            "completed",
+            {"query": "泡泡玛特 财报"},
+            {"total_results": 8},
+        )
+
+        self.assertEqual(display_name, "网页搜索")
+        self.assertEqual(status_text, "已搜索到 8 条信息")
 
     def test_integrator_system_message_requires_report_contract(self):
         system_message = build_cross_integrator_system_message()

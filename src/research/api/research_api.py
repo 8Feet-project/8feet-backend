@@ -278,12 +278,19 @@ def _workflow_node_from_log(log: dict[str, Any], index: int) -> dict[str, Any]:
 
 
 def _workflow_tool_payload(call_node: dict[str, Any] | None, return_node: dict[str, Any] | None) -> dict[str, Any]:
+    tool_name = _tool_name_from_node(call_node or return_node or {})
+    status = (return_node or call_node or {}).get("node_status") or "running"
+    input_payload = ((call_node or {}).get("payload") or {}).get("input")
+    output_payload = ((return_node or {}).get("payload") or {}).get("output")
+    display_name, status_text = _tool_display(tool_name, status, input_payload, output_payload)
     payload = {
-        "tool_name": _tool_name_from_node(call_node or return_node or {}),
+        "tool_name": tool_name,
+        "display_name": display_name,
         "execution_id": (call_node or return_node or {}).get("execution_id"),
-        "status": (return_node or call_node or {}).get("node_status") or "running",
-        "input": ((call_node or {}).get("payload") or {}).get("input"),
-        "output": ((return_node or {}).get("payload") or {}).get("output"),
+        "status": status,
+        "status_text": status_text,
+        "input": input_payload,
+        "output": output_payload,
         "started_at": (call_node or {}).get("updated_at"),
         "finished_at": (return_node or {}).get("updated_at"),
     }
@@ -294,6 +301,62 @@ def _workflow_tool_payload(call_node: dict[str, Any] | None, return_node: dict[s
     ]
     payload["source_node_ids"] = source_ids
     return payload
+
+
+def _parse_tool_output(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _tool_display(
+    tool_name: str,
+    status: str,
+    input_payload: Any,
+    output_payload: Any,
+) -> tuple[str, str]:
+    normalized = (tool_name or "").strip()
+    args = input_payload if isinstance(input_payload, dict) else {}
+    output = _parse_tool_output(output_payload)
+    completed = str(status or "").lower() in {"completed", "skipped"}
+
+    if normalized == "web_search":
+        query = str(args.get("query", "") or output.get("query", "") or "").strip()
+        count = output.get("total_results") or output.get("count") or output.get("result_count")
+        display = "网页搜索"
+        if completed:
+            return display, f"已搜索到 {count} 条信息" if count not in (None, "") else "已完成网页搜索"
+        return display, f"正在搜索「{query}」" if query else "正在搜索网页"
+    if normalized == "web_fetch":
+        url = str(args.get("url", "") or output.get("url", "") or "").strip()
+        display = "网页读取"
+        if completed:
+            return display, "已读取网页"
+        return display, f"正在读取网页：{url}" if url else "正在读取网页"
+    if normalized == "write_file":
+        path = str(args.get("path", "") or "").strip()
+        display = "写入文件"
+        if completed:
+            return display, "文件已写入"
+        return display, f"正在写入文件：{path}" if path else "正在写入文件"
+    if normalized in {"present_report", "present_files"}:
+        display = "整理报告文件"
+        return display, "报告文件已生成" if completed else "正在整理报告文件"
+    if normalized in {"bash", "shell"}:
+        display = "执行命令"
+        return display, "命令已执行" if completed else "正在执行命令"
+    if normalized == "task":
+        display = "子代理任务"
+        return display, "子代理已完成" if completed else "正在运行子代理"
+
+    display = normalized or "工具调用"
+    return display, "工具已完成" if completed else "工具执行中"
 
 
 def _agent_step_status(nodes: list[dict[str, Any]]) -> str:
