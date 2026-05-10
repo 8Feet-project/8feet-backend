@@ -58,6 +58,12 @@ _STAGE_TEMPLATE = [
     {"key": "report", "label": "报告生成", "weight": 20},
 ]
 
+_HIDDEN_WORKFLOW_STEP_NAMES = {
+    "开始执行调研",
+    "生成回答",
+    "调研完成",
+}
+
 
 def _progress_model(task: ResearchTask) -> dict[str, Any]:
     progress = task.progress or {}
@@ -253,6 +259,8 @@ def _workflow_node_from_log(log: dict[str, Any], index: int) -> dict[str, Any]:
     status = (log.get("step_status") or log.get("status") or "completed").lower()
     if status == "paused":
         status = "waiting_user"
+    if _workflow_node_kind(event_type) == "planning" and status == "running":
+        status = "completed"
     return {
         "node_id": node_id,
         "node_name": log.get("step_name") or log.get("name") or f"步骤 {index + 1}",
@@ -289,7 +297,11 @@ def _workflow_tool_payload(call_node: dict[str, Any] | None, return_node: dict[s
 
 
 def _agent_step_status(nodes: list[dict[str, Any]]) -> str:
-    statuses = [str(node.get("node_status") or "").lower() for node in nodes]
+    statuses = [
+        str(node.get("node_status") or "").lower()
+        for node in nodes
+        if node.get("node_kind") != "planning"
+    ]
     if any(status == "failed" for status in statuses):
         return "failed"
     if any(status == "waiting_user" for status in statuses):
@@ -299,6 +311,15 @@ def _agent_step_status(nodes: list[dict[str, Any]]) -> str:
     if statuses and all(status in {"completed", "skipped"} for status in statuses):
         return "completed"
     return statuses[-1] if statuses else "completed"
+
+
+def _is_hidden_workflow_log(log: dict[str, Any]) -> bool:
+    step_name = str(log.get("step_name") or log.get("name") or "").strip()
+    if step_name in _HIDDEN_WORKFLOW_STEP_NAMES:
+        return True
+    detail = log.get("detail") if isinstance(log.get("detail"), dict) else {}
+    event_type = str(detail.get("event_type", "") or "").strip().lower()
+    return event_type == "message" and step_name in {"生成回答", "调研完成"}
 
 
 def _agent_step_node(nodes: list[dict[str, Any]], order: int) -> dict[str, Any]:
@@ -658,7 +679,7 @@ def task_steps(request: HttpRequest, task_id: int):
 
     [route]: GET /api/v1/research/tasks/{task_id}/workflow
     """
-    logs = get_task_step_logs(task_id, request.user.id)
+    logs = [log for log in get_task_step_logs(task_id, request.user.id) if not _is_hidden_workflow_log(log)]
     raw_nodes = [_workflow_node_from_log(log, index) for index, log in enumerate(logs)]
     _pair_workflow_nodes(raw_nodes)
     nodes = _collapse_agent_step_nodes(raw_nodes)
@@ -758,6 +779,11 @@ def task_events(request: HttpRequest, task_id: int):
     logs = TaskStepLog.objects.filter(task_id=task_id).order_by("created_at")
     events = []
     for log in logs:
+        if _is_hidden_workflow_log({
+            "step_name": log.step_name,
+            "detail": log.detail,
+        }):
+            continue
         detail = log.detail if isinstance(log.detail, dict) else {}
         event_type = str(detail.get("event_type", "") or "")
         events.append({

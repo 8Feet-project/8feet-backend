@@ -39,7 +39,12 @@ from research.interface.research_runtime import (
     _resolve_max_turns,
 )
 from research.interface.research_interface import infer_object_type
-from research.api.research_api import _progress_model
+from research.api.research_api import (
+    _agent_step_status,
+    _is_hidden_workflow_log,
+    _progress_model,
+    _workflow_node_from_log,
+)
 
 
 class ResearchRuntimeConstraintTests(SimpleTestCase):
@@ -251,6 +256,55 @@ class ResearchProgressModelTests(SimpleTestCase):
         self.assertEqual(model["stages"][3]["status"], "pending")
         self.assertEqual(model["stages"][2]["progress_percent"], 85)
         self.assertEqual(model["percent"], 75)
+
+    def test_workflow_hides_shell_step_logs(self):
+        for step_name in ("开始执行调研", "生成回答", "调研完成"):
+            with self.subTest(step_name=step_name):
+                self.assertTrue(
+                    _is_hidden_workflow_log(
+                        {
+                            "step_name": step_name,
+                            "detail": {"event_type": "message"},
+                        }
+                    )
+                )
+
+        self.assertFalse(
+            _is_hidden_workflow_log(
+                {
+                    "step_name": "规划下一步",
+                    "detail": {"event_type": "pre_tool_text"},
+                }
+            )
+        )
+
+    def test_planning_nodes_do_not_remain_running(self):
+        node = _workflow_node_from_log(
+            {
+                "id": 11,
+                "step_name": "规划下一步",
+                "step_status": "RUNNING",
+                "detail": {
+                    "event_type": "pre_tool_text",
+                    "message": "搜索近期公告和新闻。",
+                },
+            },
+            0,
+        )
+
+        self.assertEqual(node["node_kind"], "planning")
+        self.assertEqual(node["node_status"], "completed")
+
+    def test_agent_step_status_ignores_planning_status(self):
+        status = _agent_step_status(
+            [
+                {"node_kind": "planning", "node_status": "running"},
+                {"node_kind": "tool_call", "node_status": "completed"},
+                {"node_kind": "tool_return", "node_status": "completed"},
+            ]
+        )
+
+        self.assertEqual(status, "completed")
 
     def test_integrator_system_message_requires_report_contract(self):
         system_message = build_cross_integrator_system_message()
