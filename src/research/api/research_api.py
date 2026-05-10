@@ -471,6 +471,73 @@ def _summarize_event_message(step_name: str, detail: dict[str, Any]) -> str:
     return step_name
 
 
+def _task_reference_items(task: ResearchTask) -> list[dict[str, Any]]:
+    conversation = getattr(task, "conversation", None)
+    state = getattr(conversation, "state_snapshot", None) if conversation is not None else None
+    citations = state.get("citations", []) if isinstance(state, dict) else []
+    if not isinstance(citations, list):
+        citations = []
+
+    items: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for index, citation in enumerate(citations, start=1):
+        if not isinstance(citation, dict):
+            continue
+        cite_key = str(citation.get("cite_key", "") or "").strip()
+        url = str(citation.get("url", "") or "").strip()
+        identity = cite_key or url
+        if not identity or identity in seen_keys:
+            continue
+        seen_keys.add(identity)
+        items.append(
+            {
+                "reference_id": cite_key or f"source-{index}",
+                "cite_key": cite_key,
+                "index_number": index,
+                "title": str(citation.get("title", "") or f"参考信息 {index}"),
+                "url": url,
+                "source_platform": str(citation.get("source_platform", "") or ""),
+                "source_type": str(citation.get("source_category", "") or citation.get("endpoint", "") or ""),
+                "authority_score": citation.get("authority_score"),
+                "authority_tier": str(citation.get("authority_tier", "") or ""),
+                "summary": content_to_text(
+                    citation.get("summary")
+                    or citation.get("note")
+                    or citation.get("applies_to")
+                    or ""
+                )[:500],
+                "evidence_path": (
+                    f"/mnt/user-data/workspace/evidence/{cite_key}.md"
+                    if cite_key
+                    else ""
+                ),
+                "accessed_at": str(citation.get("accessed_at", "") or ""),
+            }
+        )
+
+    if items:
+        return items
+
+    rows = ScrapedContent.objects.filter(task_id=task.id).order_by("-relevance_score", "id")
+    return [
+        {
+            "reference_id": f"source-{index}",
+            "cite_key": "",
+            "index_number": index,
+            "title": row.source_title,
+            "url": row.source_url,
+            "source_platform": "",
+            "source_type": row.source_type,
+            "authority_score": row.relevance_score,
+            "authority_tier": "",
+            "summary": content_to_text(row.content_text)[:500],
+            "evidence_path": "",
+            "accessed_at": row.scraped_at.isoformat() if row.scraped_at else "",
+        }
+        for index, row in enumerate(rows, start=1)
+    ]
+
+
 @response_wrapper
 @require_POST
 @jwt_auth(perms=['research.create_research'])
@@ -698,7 +765,12 @@ def task_steps(request: HttpRequest, task_id: int):
 @require_GET
 @jwt_auth(perms=['research.view_research'])
 def task_facts(request: HttpRequest, task_id: int):
-    task = _get_user_task(task_id, request.user.id)
+    task = (
+        ResearchTask.objects
+        .filter(pk=task_id, user_id=request.user.id)
+        .select_related("conversation")
+        .first()
+    )
     if not task:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
     rows = ScrapedContent.objects.filter(task_id=task.id)
@@ -709,6 +781,7 @@ def task_facts(request: HttpRequest, task_id: int):
         "task_id": str(task.id),
         "fact_count": rows.count(),
         "sources": [{"source_name": key, "count": value} for key, value in source_counts.items()],
+        "references": _task_reference_items(task),
         "top_entities": [task.object_name],
         "dataset_version": f"task-{task.id}",
     })

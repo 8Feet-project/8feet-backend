@@ -43,6 +43,7 @@ from research.api.research_api import (
     _agent_step_status,
     _is_hidden_workflow_log,
     _progress_model,
+    _task_reference_items,
     _workflow_node_from_log,
 )
 
@@ -305,6 +306,37 @@ class ResearchProgressModelTests(SimpleTestCase):
         )
 
         self.assertEqual(status, "completed")
+
+    def test_task_reference_items_uses_state_citations(self):
+        task = SimpleNamespace(
+            id=7,
+            conversation=SimpleNamespace(
+                state_snapshot={
+                    "citations": [
+                        {
+                            "cite_key": "web_fetch_example",
+                            "title": "示例来源",
+                            "url": "https://example.com/source",
+                            "source_platform": "example.com",
+                            "source_category": "web",
+                            "authority_score": 72,
+                            "summary": "可引用证据摘要",
+                            "accessed_at": "2026-05-10T12:00:00",
+                        }
+                    ]
+                }
+            ),
+        )
+
+        references = _task_reference_items(task)
+
+        self.assertEqual(len(references), 1)
+        self.assertEqual(references[0]["cite_key"], "web_fetch_example")
+        self.assertEqual(references[0]["title"], "示例来源")
+        self.assertEqual(
+            references[0]["evidence_path"],
+            "/mnt/user-data/workspace/evidence/web_fetch_example.md",
+        )
 
     def test_integrator_system_message_requires_report_contract(self):
         system_message = build_cross_integrator_system_message()
