@@ -5,6 +5,8 @@
 import json
 
 from django.http import HttpRequest
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_GET, require_POST
 
 from research.models.scraped_content import ScrapedContent
@@ -191,7 +193,10 @@ def followup_question(request: HttpRequest, report_id: int):
 @require_GET
 @jwt_auth(perms=['reports.view_report'])
 def report_citations(request: HttpRequest, report_id: int):
-    rows = [_serialize_citation(item) for item in Citation.objects.filter(report_id=report_id)]
+    report = get_report_detail(report_id)
+    if not report:
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "报告不存在")
+    rows = [_serialize_citation(item) for item in report.get("citations", [])]
     return success_api_response({
         "report_id": str(report_id),
         "list": rows,
@@ -214,11 +219,11 @@ def report_citation_detail(request: HttpRequest, report_id: int, citation_id: in
         .first()
     )
     return success_api_response({
-        **_serialize_citation(citation),
+        **_serialize_citation(_citation_detail_payload(citation)),
         "report_id": str(report_id),
         "excerpt": citation.cited_text_snippet or "",
         "published_at": (
-            scraped_content.scraped_at.isoformat()
+            _isoformat(scraped_content.scraped_at)
             if scraped_content and scraped_content.scraped_at
             else ""
         ),
@@ -287,21 +292,64 @@ def _serialize_followup(followup):
         "question": followup.question,
         "answer": followup.answer or "",
         "status": "completed" if followup.answer else "pending",
-        "created_at": followup.created_at.isoformat(),
-        "updated_at": followup.created_at.isoformat(),
+        "created_at": _isoformat(followup.created_at),
+        "updated_at": _isoformat(followup.created_at),
     }
 
 
 def _serialize_citation(citation):
+    if isinstance(citation, dict):
+        citation_id = citation.get("id") or citation.get("citation_id") or citation.get("index_number") or ""
+        return {
+            "citation_id": str(citation_id),
+            "index_number": int(citation.get("index_number") or 0),
+            "cite_key": citation.get("cite_key") or "",
+            "source_title": citation.get("source_title") or "",
+            "source_url": citation.get("source_url") or "",
+            "source_type": citation.get("source_type") or "",
+            "source_platform": citation.get("source_platform") or "",
+            "accessed_at": citation.get("accessed_at") or "",
+            "bibtex": citation.get("bibtex") or "",
+        }
     return {
         "citation_id": str(citation.id),
+        "index_number": citation.index_number,
+        "cite_key": "",
         "source_title": citation.source_title,
         "source_url": citation.source_url,
+        "source_type": "",
+        "source_platform": "",
+        "accessed_at": "",
+        "bibtex": "",
     }
 
 
 def _isoformat(value):
-    return value.isoformat() if hasattr(value, "isoformat") else (value or "")
+    if not value:
+        return ""
+    if hasattr(value, "isoformat"):
+        return timezone.localtime(value).isoformat()
+    parsed = parse_datetime(str(value))
+    if parsed is not None:
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed, timezone.get_default_timezone())
+        return timezone.localtime(parsed).isoformat()
+    return str(value)
+
+
+def _citation_detail_payload(citation: Citation) -> dict:
+    report = get_report_detail(citation.report_id)
+    if report:
+        citation_id = str(citation.id)
+        for item in report.get("citations", []):
+            if str(item.get("id") or item.get("citation_id") or "") == citation_id:
+                return item
+    return {
+        "id": citation.id,
+        "index_number": citation.index_number,
+        "source_title": citation.source_title,
+        "source_url": citation.source_url,
+    }
 
 
 def _serialize_report_list_item(report: dict):
@@ -326,12 +374,9 @@ def _serialize_report_detail(report: dict):
         "content_brief": report.get("content_brief") or "",
         "report_mode": report.get("report_mode") or "full",
         "citations": [
-            {
-                "citation_id": str(item.get("id") or item.get("index_number") or ""),
-                "source_title": item.get("source_title") or "",
-                "source_url": item.get("source_url") or "",
-            }
+            _serialize_citation(item)
             for item in report.get("citations", [])
         ],
-        "created_at": report.get("created_at") or "",
+        "references_bibtex": report.get("references_bibtex") or "",
+        "created_at": _isoformat(report.get("created_at")),
     }

@@ -1,7 +1,8 @@
 """
 报告管理业务逻辑 — interface 层
 """
-from typing import Tuple, Optional, List
+import re
+from typing import Any, Tuple, Optional, List
 
 from reports.models.report import Report
 from reports.models.export_record import ReportExportRecord
@@ -18,6 +19,18 @@ from reports.interface.export_utils import (
 from reports.interface.storage_utils import upload_report_file
 
 
+DSML_WRITE_FILE_CONTENT_RE = re.compile(
+    r'<｜DSML｜parameter\s+name="content"[^>]*>(?P<content>.*?)(?:</｜DSML｜parameter>|</｜DSML｜invoke>|</｜DSML｜tool_calls>|$)',
+    re.S,
+)
+DSML_BLOCK_RE = re.compile(r"<｜DSML｜.*", re.S)
+AUTO_REFERENCES_RE = re.compile(
+    r"\n?<!-- efeet:auto-references:start -->.*?<!-- efeet:auto-references:end -->\s*",
+    re.S,
+)
+CITE_KEY_RE = re.compile(r"\[@([A-Za-z0-9_.:-]+)\]")
+
+
 def get_report_detail(report_id: int, report_mode: str = 'full') -> Optional[dict]:
     """获取报告详情"""
     report = Report.objects.filter(pk=report_id).first()
@@ -25,27 +38,32 @@ def get_report_detail(report_id: int, report_mode: str = 'full') -> Optional[dic
         return None
 
     report_mode = normalize_report_mode(report_mode)
+    full_content = normalize_report_markdown(report.content_markdown)
+    brief_content = normalize_report_markdown(report.content_brief)
     if not report.content_brief and report.content_markdown:
         report.content_brief = build_brief_from_markdown(report)
         report.save(update_fields=['content_brief'])
+        brief_content = normalize_report_markdown(report.content_brief)
 
     citations = list(Citation.objects.filter(report=report).values(
-        'index_number', 'source_url', 'source_title', 'cited_text_snippet'
+        'id', 'index_number', 'source_url', 'source_title', 'cited_text_snippet'
     ))
+    enriched_citations = _enrich_citations_from_state(report, citations)
 
     return {
         "id": report.id,
         "task_id": report.task_id,
         "title": report.title,
-        "summary": report.summary,
-        "content_markdown": report.content_markdown,
-        "content_brief": report.content_brief,
-        "content": get_report_content(report, report_mode),
+        "summary": normalize_report_markdown(report.summary),
+        "content_markdown": full_content,
+        "content_brief": brief_content,
+        "content": brief_content if report_mode == "brief" else full_content,
         "report_mode": report_mode,
         "file_pdf_path": report.file_pdf_path,
         "file_word_path": report.file_word_path,
         "version": report.version,
-        "citations": citations,
+        "citations": enriched_citations,
+        "references_bibtex": _render_bibtex(enriched_citations),
         "created_at": report.created_at.isoformat(),
     }
 
@@ -243,3 +261,121 @@ def _build_export_object_key(report: Report, export_format: str, report_mode: st
 
     filename = Path(file_path).name
     return f"reports/{report.task_id}/v{report.version}/{report_mode}/{export_format}/{filename}"
+
+
+def normalize_report_markdown(text: str | None) -> str:
+    """Strip agent tool-call envelopes that can leak into stored markdown."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+
+    matched = DSML_WRITE_FILE_CONTENT_RE.search(raw)
+    if matched:
+        raw = matched.group("content").strip()
+
+    raw = AUTO_REFERENCES_RE.sub("", raw).strip()
+    raw = DSML_BLOCK_RE.sub("", raw).strip()
+    return raw
+
+
+def cite_keys_from_markdown(markdown_text: str) -> list[str]:
+    seen: set[str] = set()
+    keys: list[str] = []
+    for match in CITE_KEY_RE.finditer(markdown_text or ""):
+        key = match.group(1)
+        if key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+    return keys
+
+
+def _enrich_citations_from_state(report: Report, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    state_citations = _state_citations_by_url(report)
+    used_keys = cite_keys_from_markdown(
+        "\n".join(
+            [
+                normalize_report_markdown(report.content_markdown),
+                normalize_report_markdown(report.content_brief),
+                normalize_report_markdown(report.summary),
+            ]
+        )
+    )
+    used_key_by_url = {
+        str(item.get("url", "") or "").strip(): str(item.get("cite_key", "") or "").strip()
+        for item in state_citations.values()
+        if str(item.get("url", "") or "").strip() and str(item.get("cite_key", "") or "").strip() in used_keys
+    }
+
+    enriched: list[dict[str, Any]] = []
+    for item in citations:
+        url = str(item.get("source_url", "") or "").strip()
+        state_item = state_citations.get(url, {})
+        cite_key = str(state_item.get("cite_key") or used_key_by_url.get(url) or "").strip()
+        enriched.append(
+            {
+                **item,
+                "cite_key": cite_key,
+                "source_platform": state_item.get("source_platform") or "",
+                "source_type": state_item.get("source_category") or state_item.get("endpoint") or "",
+                "accessed_at": state_item.get("accessed_at") or "",
+                "bibtex": _render_bibtex_entry(cite_key, item, state_item) if cite_key else "",
+            }
+        )
+    return enriched
+
+
+def _state_citations_by_url(report: Report) -> dict[str, dict[str, Any]]:
+    conversation = getattr(report.task, "conversation", None)
+    state = getattr(conversation, "state_snapshot", None) if conversation is not None else None
+    citations = state.get("citations", []) if isinstance(state, dict) else []
+    if not isinstance(citations, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for item in citations:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url", "") or "").strip()
+        if not url:
+            continue
+        result[url] = item
+    return result
+
+
+def _bibtex_escape(value: Any) -> str:
+    return (
+        str(value or "")
+        .replace("\\", "\\\\")
+        .replace("{", "\\{")
+        .replace("}", "\\}")
+        .replace('"', '\\"')
+    )
+
+
+def _render_bibtex_entry(cite_key: str, citation: dict[str, Any], state_item: dict[str, Any]) -> str:
+    title = state_item.get("title") or citation.get("source_title") or cite_key
+    fields = [
+        ("title", title),
+        ("url", state_item.get("url") or citation.get("source_url") or ""),
+        ("sourceplatform", state_item.get("source_platform") or ""),
+        ("provider", state_item.get("provider") or ""),
+        ("toolname", state_item.get("tool_name") or ""),
+        ("howpublished", state_item.get("howpublished") or ""),
+        ("note", state_item.get("note") or ""),
+        ("accessedat", state_item.get("accessed_at") or ""),
+    ]
+    rendered_fields = [
+        f"  {name} = {{{_bibtex_escape(value)}}}"
+        for name, value in fields
+        if str(value or "").strip()
+    ]
+    entry_type = str(state_item.get("entry_type") or "misc")
+    return f"@{entry_type}{{{cite_key},\n" + ",\n".join(rendered_fields) + "\n}"
+
+
+def _render_bibtex(citations: list[dict[str, Any]]) -> str:
+    return "\n\n".join(
+        str(item.get("bibtex") or "").strip()
+        for item in citations
+        if str(item.get("bibtex") or "").strip()
+    )

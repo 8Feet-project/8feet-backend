@@ -7,6 +7,7 @@ from django.test import Client, TestCase
 
 from reports.models.citation import Citation
 from reports.models.report import Report
+from research.models.conversation import ResearchConversation
 from research.models.research_task import ResearchTask
 from research.models.scraped_content import ScrapedContent
 
@@ -59,6 +60,49 @@ class ReportCitationDetailApiTests(TestCase):
         )
         self.client = Client(HTTP_AUTHORIZATION=f"Bearer {token}")
 
+    def test_report_detail_cleans_tool_markup_and_exposes_cite_metadata(self):
+        self.report.content_markdown = (
+            'Now let me write the report.\n\n'
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="write_file">\n'
+            '<｜DSML｜parameter name="path" string="true">/mnt/user-data/outputs/research_report.md</｜DSML｜parameter>\n'
+            '<｜DSML｜parameter name="content" string="true"># 报告\n\n'
+            '结论来自来源[@example_source]。'
+        )
+        self.report.save(update_fields=["content_markdown"])
+        ResearchConversation.objects.create(
+            task=self.task,
+            thread_id="thread-report-citation",
+            state_snapshot={
+                "citations": [
+                    {
+                        "cite_key": "example_source",
+                        "url": self.citation.source_url,
+                        "title": self.citation.source_title,
+                        "source_platform": "example.com",
+                        "provider": "web_fetch",
+                        "tool_name": "web_fetch",
+                        "howpublished": "[EB/OL]",
+                        "accessed_at": "2026-05-10T12:00:00",
+                        "entry_type": "misc",
+                    }
+                ]
+            },
+        )
+
+        response = self.client.get(f"/api/v1/reports/{self.report.id}", secure=True)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["data"]
+        self.assertTrue(payload["content_markdown"].startswith("# 报告"))
+        self.assertNotIn("DSML", payload["content_markdown"])
+        self.assertNotIn("Now let me write", payload["content_markdown"])
+        self.assertEqual(payload["citations"][0]["index_number"], 1)
+        self.assertEqual(payload["citations"][0]["cite_key"], "example_source")
+        self.assertIn("@misc{example_source", payload["citations"][0]["bibtex"])
+        self.assertIn("@misc{example_source", payload["references_bibtex"])
+        self.assertIn("+08:00", payload["created_at"])
+
     def test_report_citation_detail_includes_source_metadata_from_scraped_content(self):
         response = self.client.get(
             f"/api/v1/reports/{self.report.id}/citations/{self.citation.id}",
@@ -73,5 +117,5 @@ class ReportCitationDetailApiTests(TestCase):
         self.assertEqual(payload["data"]["source_type"], "NEWS")
         self.assertEqual(
             payload["data"]["published_at"],
-            self.scraped_content.scraped_at.isoformat(),
+            self.scraped_content.scraped_at.astimezone().isoformat(),
         )

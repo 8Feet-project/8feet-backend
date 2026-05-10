@@ -71,6 +71,7 @@ from llm_manager.interface.llm_interface import (
 )
 from llm_manager.models.llm_config import LLMConfig
 from reports.models.citation import Citation
+from reports.interface.report_interface import normalize_report_markdown
 from research.interface.prompt_contracts import (
     citation_discipline_requirements,
     object_type_research_requirements,
@@ -1186,6 +1187,8 @@ def _create_report(
     *,
     brief_output: str | None = None,
 ) -> Report:
+    normalized_output = normalize_report_markdown(final_output)
+    normalized_brief = normalize_report_markdown(brief_output)
     latest_report = Report.objects.filter(task=task, is_latest=True).first()
     next_version = 1 if latest_report is None else latest_report.version + 1
     if latest_report is not None:
@@ -1195,9 +1198,9 @@ def _create_report(
     report = Report.objects.create(
         task=task,
         title=task.title,
-        summary=_extract_summary(final_output),
-        content_markdown=final_output,
-        content_brief=(brief_output or "").strip() or _extract_summary(final_output),
+        summary=_extract_summary(normalized_output),
+        content_markdown=normalized_output,
+        content_brief=normalized_brief or _extract_summary(normalized_output),
         version=next_version,
         is_latest=True,
     )
