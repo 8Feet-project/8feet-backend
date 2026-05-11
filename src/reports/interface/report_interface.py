@@ -50,7 +50,8 @@ def get_report_detail(report_id: int, report_mode: str = 'full') -> Optional[dic
         brief_content = normalize_report_markdown(report.content_brief)
 
     citations = list(Citation.objects.filter(report=report).values(
-        'id', 'index_number', 'source_url', 'source_title', 'cited_text_snippet'
+        'id', 'index_number', 'source_url', 'source_title', 'cited_text_snippet',
+        'reproduction_code'
     ))
     enriched_citations = _enrich_citations_from_state(report, citations)
 
@@ -329,6 +330,7 @@ def _enrich_citations_from_state(report: Report, citations: list[dict[str, Any]]
                 "source_platform": state_item.get("source_platform") or "",
                 "source_type": state_item.get("source_category") or state_item.get("endpoint") or "",
                 "accessed_at": state_item.get("accessed_at") or "",
+                "reproduction_code": item.get("reproduction_code") or state_item.get("reproduction_code") or "",
                 "bibtex": _render_bibtex_entry(cite_key, item, state_item) if cite_key else "",
             }
         )

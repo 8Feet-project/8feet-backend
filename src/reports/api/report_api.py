@@ -218,8 +218,9 @@ def report_citation_detail(request: HttpRequest, report_id: int, citation_id: in
         .order_by('-relevance_score', '-scraped_at', '-id')
         .first()
     )
+    payload = _serialize_citation(_citation_detail_payload(citation))
     return success_api_response({
-        **_serialize_citation(_citation_detail_payload(citation)),
+        **payload,
         "report_id": str(report_id),
         "excerpt": citation.cited_text_snippet or "",
         "published_at": (
@@ -227,7 +228,7 @@ def report_citation_detail(request: HttpRequest, report_id: int, citation_id: in
             if scraped_content and scraped_content.scraped_at
             else ""
         ),
-        "source_type": scraped_content.source_type if scraped_content else "",
+        "source_type": scraped_content.source_type if scraped_content else payload.get("source_type", ""),
     })
 
 
@@ -309,6 +310,7 @@ def _serialize_citation(citation):
             "source_type": citation.get("source_type") or "",
             "source_platform": citation.get("source_platform") or "",
             "accessed_at": citation.get("accessed_at") or "",
+            "reproduction_code": citation.get("reproduction_code") or "",
             "bibtex": citation.get("bibtex") or "",
         }
     return {
@@ -320,6 +322,7 @@ def _serialize_citation(citation):
         "source_type": "",
         "source_platform": "",
         "accessed_at": "",
+        "reproduction_code": citation.reproduction_code or "",
         "bibtex": "",
     }
 
@@ -349,6 +352,7 @@ def _citation_detail_payload(citation: Citation) -> dict:
         "index_number": citation.index_number,
         "source_title": citation.source_title,
         "source_url": citation.source_url,
+        "reproduction_code": citation.reproduction_code or "",
     }
 
 

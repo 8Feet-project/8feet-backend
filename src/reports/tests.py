@@ -99,6 +99,7 @@ class ReportCitationDetailApiTests(TestCase):
         self.assertNotIn("Now let me write", payload["content_markdown"])
         self.assertEqual(payload["citations"][0]["index_number"], 1)
         self.assertEqual(payload["citations"][0]["cite_key"], "example_source")
+        self.assertEqual(payload["citations"][0]["reproduction_code"], "")
         self.assertIn("@misc{example_source", payload["citations"][0]["bibtex"])
         self.assertIn("@misc{example_source", payload["references_bibtex"])
         self.assertIn("+08:00", payload["created_at"])
@@ -114,8 +115,66 @@ class ReportCitationDetailApiTests(TestCase):
         self.assertEqual(payload["code"], 0)
         self.assertEqual(payload["data"]["citation_id"], str(self.citation.id))
         self.assertEqual(payload["data"]["excerpt"], "这是引用摘要")
+        self.assertEqual(payload["data"]["reproduction_code"], "")
         self.assertEqual(payload["data"]["source_type"], "NEWS")
         self.assertEqual(
             payload["data"]["published_at"],
             self.scraped_content.scraped_at.astimezone().isoformat(),
         )
+
+    def test_url_less_citation_exposes_state_metadata_and_reproduction_code(self):
+        self.report.content_markdown = (
+            "# 报告\n\n"
+            "网页来源提供背景信息[@EXAMPLE_SOURCE]，结构化数据来自 AkShare[@AKSHARE_AUTO_SALES]。"
+        )
+        self.report.save(update_fields=["content_markdown"])
+        citation = Citation.objects.create(
+            report=self.report,
+            index_number=2,
+            source_url="",
+            source_title="AkShare 中国汽车销量数据",
+            cited_text_snippet="销量数据摘要",
+        )
+        ResearchConversation.objects.create(
+            task=self.task,
+            thread_id="thread-url-less-citation",
+            state_snapshot={
+                "citations": [
+                    {
+                        "cite_key": "AKSHARE_AUTO_SALES",
+                        "title": citation.source_title,
+                        "source_platform": "akshare",
+                        "source_category": "structured_dataset",
+                        "provider": "akshare",
+                        "tool_name": "akshare_tool",
+                        "howpublished": "通过 AkShare 接口获取",
+                        "reproduction_code": "import akshare as ak\nak.car_market_total_cpca()",
+                    }
+                ]
+            },
+        )
+
+        detail_response = self.client.get(f"/api/v1/reports/{self.report.id}", secure=True)
+        list_response = self.client.get(f"/api/v1/reports/{self.report.id}/citations", secure=True)
+        item_response = self.client.get(
+            f"/api/v1/reports/{self.report.id}/citations/{citation.id}",
+            secure=True,
+        )
+
+        self.assertEqual(detail_response.status_code, 200)
+        detail_payload = detail_response.json()["data"]
+        url_less = next(item for item in detail_payload["citations"] if item["citation_id"] == str(citation.id))
+        self.assertEqual(url_less["source_url"], "")
+        self.assertEqual(url_less["cite_key"], "akshare_auto_sales")
+        self.assertEqual(url_less["source_platform"], "akshare")
+        self.assertEqual(url_less["source_type"], "structured_dataset")
+        self.assertIn("ak.car_market_total_cpca", url_less["reproduction_code"])
+        self.assertIn("@misc{akshare_auto_sales", url_less["bibtex"])
+
+        list_payload = list_response.json()["data"]
+        listed = next(item for item in list_payload["list"] if item["citation_id"] == str(citation.id))
+        self.assertIn("ak.car_market_total_cpca", listed["reproduction_code"])
+
+        item_payload = item_response.json()["data"]
+        self.assertEqual(item_payload["source_type"], "structured_dataset")
+        self.assertIn("ak.car_market_total_cpca", item_payload["reproduction_code"])
