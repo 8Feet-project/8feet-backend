@@ -296,6 +296,7 @@ def cite_keys_from_markdown(markdown_text: str) -> list[str]:
 
 def _enrich_citations_from_state(report: Report, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     state_citations = _state_citations_by_url(report)
+    state_citations_by_key = _state_citations_by_key(report)
     used_keys = cite_keys_from_markdown(
         "\n".join(
             [
@@ -314,10 +315,13 @@ def _enrich_citations_from_state(report: Report, citations: list[dict[str, Any]]
             used_key_by_url[url] = cite_key
 
     enriched: list[dict[str, Any]] = []
-    for item in citations:
+    for position, item in enumerate(citations):
         url = str(item.get("source_url", "") or "").strip()
         state_item = state_citations.get(url, {})
-        cite_key = _normalize_cite_key(state_item.get("cite_key") or used_key_by_url.get(url))
+        fallback_key = used_keys[position] if position < len(used_keys) else ""
+        cite_key = _normalize_cite_key(state_item.get("cite_key") or used_key_by_url.get(url) or fallback_key)
+        if cite_key and not state_item:
+            state_item = state_citations_by_key.get(cite_key, {})
         enriched.append(
             {
                 **item,
@@ -345,6 +349,23 @@ def _state_citations_by_url(report: Report) -> dict[str, dict[str, Any]]:
         if not url:
             continue
         result[url] = item
+    return result
+
+
+def _state_citations_by_key(report: Report) -> dict[str, dict[str, Any]]:
+    conversation = getattr(report.task, "conversation", None)
+    state = getattr(conversation, "state_snapshot", None) if conversation is not None else None
+    citations = state.get("citations", []) if isinstance(state, dict) else []
+    if not isinstance(citations, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for item in citations:
+        if not isinstance(item, dict):
+            continue
+        cite_key = _normalize_cite_key(item.get("cite_key"))
+        if not cite_key:
+            continue
+        result[cite_key] = item
     return result
 
 

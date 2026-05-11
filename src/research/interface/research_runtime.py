@@ -71,7 +71,7 @@ from llm_manager.interface.llm_interface import (
 )
 from llm_manager.models.llm_config import LLMConfig
 from reports.models.citation import Citation
-from reports.interface.report_interface import normalize_report_markdown
+from reports.interface.report_interface import cite_keys_from_markdown, normalize_report_markdown
 from research.interface.prompt_contracts import (
     citation_discipline_requirements,
     object_type_research_requirements,
@@ -109,7 +109,7 @@ from research.models import (
     TaskStepLog,
 )
 
-DEFAULT_MAX_TURNS = 30
+DEFAULT_MAX_TURNS = 100
 MAX_WORKERS = 4
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / '.env')
@@ -482,7 +482,7 @@ def _resolve_max_turns(search_params: dict[str, Any] | None) -> int:
         value = int(params.get("max_turns", DEFAULT_MAX_TURNS))
     except (TypeError, ValueError):
         value = DEFAULT_MAX_TURNS
-    return min(max(value, 6), 40)
+    return min(max(value, 6), 100)
 
 
 def _resolve_sandbox_paths(search_params: dict[str, Any] | None) -> SandboxPaths | None:
@@ -709,10 +709,17 @@ def _merge_citation_snapshots(existing: object, new: list[dict[str, Any]]) -> li
     return [merged[key] for key in order]
 
 
-def _subagent_detail_extra(event: dict[str, Any]) -> dict[str, Any]:
-    """Extract subagent linking fields from a subagent event."""
+def _event_detail_extra(event: dict[str, Any]) -> dict[str, Any]:
+    """Extract workflow linking metadata from a runtime event."""
     extra: dict[str, Any] = {}
-    for key in ("subagent_id", "parent_tool_call_id", "subagent_type", "description"):
+    for key in (
+        "subagent_id",
+        "parent_tool_call_id",
+        "subagent_type",
+        "description",
+        "tool_call_batch_id",
+        "model_response_id",
+    ):
         value = event.get(key)
         if value is not None and str(value).strip():
             extra[key] = str(value).strip()
@@ -735,7 +742,7 @@ def _event_to_step(
                 "message": content_to_text(event.get("content")),
                 "run_number": run_number,
                 "event_type": event_type,
-                **_subagent_detail_extra(event),
+                **_event_detail_extra(event),
             },
         )
     if event_type in {"tool_call", "subagent_tool_call"}:
@@ -747,7 +754,7 @@ def _event_to_step(
                 "id": str(event.get("id", "") or ""),
                 "run_number": run_number,
                 "event_type": event_type,
-                **_subagent_detail_extra(event),
+                **_event_detail_extra(event),
             },
         )
     if event_type in {"tool_result", "subagent_tool_result"}:
@@ -757,10 +764,11 @@ def _event_to_step(
             {
                 "content": json_safe(event.get("content")),
                 "citation_keys": json_safe(event.get("citation_keys", [])),
+                "citations": json_safe(event.get("citations", [])),
                 "id": str(event.get("id", "") or ""),
                 "run_number": run_number,
                 "event_type": event_type,
-                **_subagent_detail_extra(event),
+                **_event_detail_extra(event),
             },
         )
     report_event = extract_presented_report_event(event)
@@ -777,7 +785,7 @@ def _event_to_step(
                 "citation_keys": list(report_event.citation_keys),
                 "run_number": run_number,
                 "event_type": event_type,
-                **_subagent_detail_extra(event),
+                **_event_detail_extra(event),
             },
         )
     if event_type == "files_presented":
@@ -788,18 +796,18 @@ def _event_to_step(
                 "paths": json_safe(event.get("paths", [])),
                 "run_number": run_number,
                 "event_type": event_type,
-                **_subagent_detail_extra(event),
+                **_event_detail_extra(event),
             },
         )
     if event_type in {"message", "subagent_message"}:
         return (
             f"{prefix}生成回答",
-            "RUNNING",
+            "COMPLETED",
             {
                 "message": content_to_text(event.get("content")),
                 "run_number": run_number,
                 "event_type": event_type,
-                **_subagent_detail_extra(event),
+                **_event_detail_extra(event),
             },
         )
     if event_type == "subagent_start":
@@ -810,7 +818,7 @@ def _event_to_step(
                 "description": content_to_text(event.get("description")),
                 "run_number": run_number,
                 "event_type": event_type,
-                **_subagent_detail_extra(event),
+                **_event_detail_extra(event),
             },
         )
     if event_type == "subagent_complete":
@@ -821,7 +829,7 @@ def _event_to_step(
                 "message": content_to_text(event.get("message")),
                 "run_number": run_number,
                 "event_type": event_type,
-                **_subagent_detail_extra(event),
+                **_event_detail_extra(event),
             },
         )
     return (
@@ -925,10 +933,27 @@ def _persist_success(
     )
     if _is_llm_failure_output(effective_output):
         raise RuntimeError(effective_output)
-    citations = _extract_citations(state_snapshot)
     presented_reports = extract_presented_reports(state_snapshot)
     new_presented_reports = presented_reports[previous_presented_report_count:]
     latest_new_presented_report = _latest_presented_report(new_presented_reports)
+    report_output = (
+        latest_new_presented_report.content
+        if latest_new_presented_report is not None
+        else effective_output
+    )
+    citations = _resolve_report_citations(
+        task=task,
+        run_number=run_number,
+        state_snapshot=state_snapshot,
+        report_markdown=report_output,
+        presented_citations=(
+            [dict(item) for item in latest_new_presented_report.citations]
+            if latest_new_presented_report is not None
+            else []
+        ),
+    )
+    if citations:
+        state_snapshot = {**state_snapshot, "citations": citations}
 
     with transaction.atomic():
         conversation.history_messages = serialized_history
@@ -968,16 +993,24 @@ def _persist_success(
             latency_ms=latency_ms,
         )
         has_persisted_report_rows = Report.objects.filter(task=task).count() > previous_report_row_count
+        persisted_report = (
+            Report.objects.filter(task=task).order_by("-version", "-id").first()
+            if has_persisted_report_rows
+            else None
+        )
         if create_report and not has_persisted_report_rows:
             if latest_new_presented_report is not None:
-                _create_report(
+                persisted_report = _create_report(
                     task,
                     latest_new_presented_report.content,
-                    [dict(item) for item in latest_new_presented_report.citations] or citations,
+                    citations,
                     brief_output=latest_new_presented_report.brief_content,
                 )
             else:
-                _create_report(task, effective_output, citations)
+                persisted_report = _create_report(task, effective_output, citations)
+        if create_report and persisted_report is not None:
+            _ensure_report_citations(persisted_report, citations)
+            _mark_pending_report_presentation_completed(task, run_number, persisted_report)
 
         task.status = STATUS_COMPLETED
         task.progress = _merge_progress(
@@ -1050,6 +1083,92 @@ def _recover_report_output_from_tool_logs(
         ):
             return content.strip()
     return effective_output
+
+
+def _resolve_report_citations(
+    *,
+    task: ResearchTask,
+    run_number: int,
+    state_snapshot: dict[str, Any],
+    report_markdown: str,
+    presented_citations: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    citations = _merge_citation_snapshots(
+        _extract_citations(state_snapshot),
+        [item for item in (presented_citations or []) if isinstance(item, dict)],
+    )
+    citations = _merge_citation_snapshots(
+        citations,
+        _recover_citations_from_tool_logs(task=task, run_number=run_number),
+    )
+
+    used_keys = cite_keys_from_markdown(report_markdown)
+    if not used_keys:
+        return citations
+
+    by_key = {
+        str(item.get("cite_key") or "").strip().lower(): item
+        for item in citations
+        if str(item.get("cite_key") or "").strip()
+    }
+    filtered = [by_key[key] for key in used_keys if key in by_key]
+    return filtered or citations
+
+
+def _recover_citations_from_tool_logs(
+    *,
+    task: ResearchTask,
+    run_number: int,
+) -> list[dict[str, Any]]:
+    rows = (
+        TaskStepLog.objects
+        .filter(task=task, detail__run_number=run_number)
+        .order_by("id")
+    )
+    citations: list[dict[str, Any]] = []
+    for row in rows:
+        detail = row.detail if isinstance(row.detail, dict) else {}
+        event_type = str(detail.get("event_type") or "").strip()
+        if event_type not in {"tool_result", "subagent_tool_result"}:
+            continue
+        event = {**detail, "type": event_type}
+        event.setdefault("name", _tool_name_from_step_name(row.step_name))
+        citations.extend(_event_citations(event))
+    return _merge_citation_snapshots([], citations)
+
+
+def _tool_name_from_step_name(step_name: str) -> str:
+    text = str(step_name or "")
+    for marker in ("工具返回: ", "调用工具: "):
+        if marker in text:
+            return text.rsplit(marker, 1)[1].strip()
+    return ""
+
+
+def _mark_pending_report_presentation_completed(
+    task: ResearchTask,
+    run_number: int,
+    report: Report,
+) -> None:
+    rows = (
+        TaskStepLog.objects
+        .filter(
+            task=task,
+            step_status="RUNNING",
+            detail__run_number=run_number,
+            detail__event_type="tool_call",
+        )
+        .order_by("id")
+    )
+    for row in rows:
+        if _tool_name_from_step_name(row.step_name) != "present_report":
+            continue
+        detail = dict(row.detail or {})
+        detail["completed_by_event_type"] = "report_persisted"
+        detail["completed_by_report_id"] = report.id
+        row.detail = detail
+        row.step_status = "COMPLETED"
+        row.save(update_fields=["step_status", "detail"])
 
 
 def _is_llm_failure_output(text: str) -> bool:
@@ -1337,12 +1456,27 @@ def _create_report(
         is_latest=True,
     )
 
-    citation_rows: list[Citation] = []
+    citation_rows = _build_citation_rows(report, citations)
+    if citation_rows:
+        Citation.objects.bulk_create(citation_rows)
+    return report
+
+
+def _ensure_report_citations(report: Report, citations: list[dict[str, Any]]) -> None:
+    if not citations or Citation.objects.filter(report=report).exists():
+        return
+    citation_rows = _build_citation_rows(report, citations)
+    if citation_rows:
+        Citation.objects.bulk_create(citation_rows)
+
+
+def _build_citation_rows(report: Report, citations: list[dict[str, Any]]) -> list[Citation]:
+    rows: list[Citation] = []
     for index, item in enumerate(citations, start=1):
         url = str(item.get("url", "") or "").strip()
         title = str(item.get("title", "") or "").strip() or f"来源 {index}"
         reproduction_code = str(item.get("reproduction_code", "") or "").strip()
-        citation_rows.append(
+        rows.append(
             Citation(
                 report=report,
                 index_number=index,
@@ -1356,9 +1490,7 @@ def _create_report(
                 reproduction_code=reproduction_code or None,
             )
         )
-    if citation_rows:
-        Citation.objects.bulk_create(citation_rows)
-    return report
+    return rows
 
 
 def _extract_summary(markdown_text: str) -> str:

@@ -219,7 +219,14 @@ def _workflow_execution_id(detail: dict[str, Any]) -> str | None:
     return None
 
 
-_SUBAGENT_LINK_KEYS = ("subagent_id", "parent_tool_call_id", "subagent_type", "description")
+_SUBAGENT_LINK_KEYS = (
+    "subagent_id",
+    "parent_tool_call_id",
+    "subagent_type",
+    "description",
+    "tool_call_batch_id",
+    "model_response_id",
+)
 
 
 def _workflow_payload(detail: dict[str, Any]) -> dict[str, Any]:
@@ -561,6 +568,7 @@ def _workflow_node_from_log(log: dict[str, Any], index: int) -> dict[str, Any]:
         "node_kind": node_kind,
         "event_type": event_type or None,
         "execution_id": _workflow_execution_id(detail),
+        "tool_call_batch_id": str(detail.get("tool_call_batch_id") or "").strip() or None,
         "paired_node_id": None,
         "can_intervene": bool(log.get("is_interactive")),
         "metrics": [],
@@ -762,6 +770,32 @@ def _agent_step_node(nodes: list[dict[str, Any]], order: int) -> dict[str, Any]:
     }
 
 
+def _tool_call_batch_end(nodes: list[dict[str, Any]], start: int) -> int:
+    """Return the end index for one model-issued tool batch.
+
+    A model turn can issue multiple tool calls in parallel. Their call events
+    are emitted before tool results. If another tool_call appears after tool
+    results, that is a later model turn and must become a separate agent step.
+    """
+    first_batch_id = str(nodes[start].get("tool_call_batch_id") or "").strip()
+    if first_batch_id:
+        index = start
+        while (
+            index < len(nodes)
+            and nodes[index].get("node_kind") in {"tool_call", "tool_return"}
+            and str(nodes[index].get("tool_call_batch_id") or "").strip() == first_batch_id
+        ):
+            index += 1
+        return index
+
+    index = start
+    while index < len(nodes) and nodes[index].get("node_kind") == "tool_call":
+        index += 1
+    while index < len(nodes) and nodes[index].get("node_kind") == "tool_return":
+        index += 1
+    return index
+
+
 def _collapse_agent_step_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     collapsed: list[dict[str, Any]] = []
     index = 0
@@ -772,18 +806,18 @@ def _collapse_agent_step_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, An
         if node.get("node_kind") == "planning":
             group = [node]
             index += 1
-            while index < len(nodes) and nodes[index].get("node_kind") in {"tool_call", "tool_return"}:
-                group.append(nodes[index])
-                index += 1
+            if index < len(nodes) and nodes[index].get("node_kind") == "tool_call":
+                end = _tool_call_batch_end(nodes, index)
+                group.extend(nodes[index:end])
+                index = end
             agent_step_count += 1
             collapsed.append(_agent_step_node(group, agent_step_count))
             continue
 
         if node.get("node_kind") == "tool_call":
-            group = []
-            while index < len(nodes) and nodes[index].get("node_kind") in {"tool_call", "tool_return"}:
-                group.append(nodes[index])
-                index += 1
+            end = _tool_call_batch_end(nodes, index)
+            group = nodes[index:end]
+            index = end
             agent_step_count += 1
             collapsed.append(_agent_step_node(group, agent_step_count))
             continue
@@ -1321,6 +1355,7 @@ def task_events(request: HttpRequest, task_id: int):
             "event_type": event_type or None,
             "node_kind": _workflow_node_kind(event_type),
             "execution_id": _workflow_execution_id(detail),
+            "tool_call_batch_id": str(detail.get("tool_call_batch_id") or "").strip() or None,
         })
     return success_api_response(events)
 

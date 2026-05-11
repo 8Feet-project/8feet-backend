@@ -8,6 +8,9 @@ from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
+from reports.interface.report_interface import get_report_detail
+from reports.models.citation import Citation
+from reports.models.report import Report
 from research.interface import research_runtime
 from research.interface.cross_validation import model_specs as cross_model_specs
 from research.interface.cross_validation import orchestrator as cross_orchestrator
@@ -41,7 +44,7 @@ from research.interface.research_runtime import (
     build_research_system_message,
     _resolve_max_turns,
 )
-from research.models import ResearchConversation, ResearchTask, ScrapedContent
+from research.models import ResearchConversation, ResearchTask, ScrapedContent, TaskStepLog
 from research.interface.research_interface import infer_object_type
 from research.api.research_api import (
     _agent_step_status,
@@ -73,14 +76,15 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
         self.assertEqual(infer_object_type("腾讯控股", None), "COMPANY")
 
     def test_default_max_turns(self):
-        self.assertEqual(_resolve_max_turns({}), 30)
+        self.assertEqual(_resolve_max_turns({}), 100)
 
     def test_custom_max_turns_in_search_params(self):
         self.assertEqual(_resolve_max_turns({"max_turns": 15}), 15)
 
     def test_max_turns_clamped_to_range(self):
         self.assertEqual(_resolve_max_turns({"max_turns": 2}), 6)
-        self.assertEqual(_resolve_max_turns({"max_turns": 99}), 40)
+        self.assertEqual(_resolve_max_turns({"max_turns": 99}), 99)
+        self.assertEqual(_resolve_max_turns({"max_turns": 120}), 100)
 
     def test_execution_constraints_do_not_limit_tool_call_counts(self):
         constraints = _build_execution_constraints({})
@@ -272,6 +276,8 @@ class ResearchRealtimeReferenceTests(TestCase):
         self.assertTrue(
             any(call.args[1] == "references_changed" for call in publish_update.call_args_list)
         )
+        log = task.step_logs.get(step_name="工具返回: web_fetch")
+        self.assertEqual(log.detail["citations"][0]["cite_key"], "WEB_FETCH_CAIXINGLOBAL_COM_ABC")
 
     def test_subagent_tool_result_content_guidance_persists_references_for_live_facts(self):
         user = get_user_model().objects.create_user(username="research-subagent-reference-user")
@@ -336,6 +342,131 @@ class ResearchRealtimeReferenceTests(TestCase):
         self.assertTrue(
             any(call.args[1] == "references_changed" for call in publish_update.call_args_list)
         )
+
+    def test_success_recovery_backfills_report_citations_and_completes_present_report(self):
+        user = get_user_model().objects.create_user(username="research-report-recovery-user")
+        task = ResearchTask.objects.create(
+            user=user,
+            title="恢复调研报告",
+            object_name="Example",
+            object_type="COMPANY",
+            status="ANALYZING",
+            progress={},
+        )
+        conversation = ResearchConversation.objects.create(
+            task=task,
+            thread_id="thread-report-recovery",
+            state_snapshot={},
+        )
+        report_markdown = "# 摘要\n\n结构化指标改善 [@akshare_key]，新闻披露支持判断 [@web_key]。"
+        TaskStepLog.objects.create(
+            task=task,
+            step_name="工具返回: akshare_company_profile",
+            step_status="COMPLETED",
+            detail={
+                "run_number": 1,
+                "event_type": "subagent_tool_result",
+                "id": "call_akshare",
+                "content": json.dumps(
+                    {
+                        "ok": True,
+                        "title": "AkShare company profile",
+                        "source_platform": "akshare",
+                        "provider": "akshare",
+                        "content": "company profile data",
+                        "citation_guidance": {
+                            "entries": [
+                                {
+                                    "cite_key": "AKSHARE_KEY",
+                                    "source_category": "financial",
+                                    "howpublished": "akshare.company_profile",
+                                }
+                            ],
+                        },
+                    }
+                ),
+            },
+        )
+        TaskStepLog.objects.create(
+            task=task,
+            step_name="工具返回: web_fetch",
+            step_status="COMPLETED",
+            detail={
+                "run_number": 1,
+                "event_type": "tool_result",
+                "id": "call_web",
+                "content": "{}",
+                "citations": [
+                    {
+                        "cite_key": "WEB_KEY",
+                        "title": "Example news",
+                        "url": "https://example.com/news",
+                        "source_platform": "example.com",
+                        "summary": "news summary",
+                    }
+                ],
+            },
+        )
+        TaskStepLog.objects.create(
+            task=task,
+            step_name="调用工具: write_file",
+            step_status="RUNNING",
+            detail={
+                "run_number": 1,
+                "event_type": "tool_call",
+                "id": "call_write",
+                "args": {
+                    "path": "/mnt/user-data/outputs/research_report.md",
+                    "content": report_markdown,
+                },
+            },
+        )
+        present_call = TaskStepLog.objects.create(
+            task=task,
+            step_name="调用工具: present_report",
+            step_status="RUNNING",
+            detail={
+                "run_number": 1,
+                "event_type": "tool_call",
+                "id": "call_present",
+                "args": {"path": "/mnt/user-data/outputs/research_report.md"},
+            },
+        )
+
+        with patch.object(research_runtime, "resolve_effective_output", return_value=research_runtime.STOPPED_MESSAGE):
+            with patch.object(research_runtime, "log_model_usage"):
+                research_runtime._persist_success(
+                    task=task,
+                    conversation=conversation,
+                    thread=SimpleNamespace(history=[], state={}),
+                    prompt="prompt",
+                    final_output=research_runtime.STOPPED_MESSAGE,
+                    create_report=True,
+                    run_number=1,
+                    previous_history_count=0,
+                    previous_presented_report_count=0,
+                    previous_report_row_count=0,
+                    llm_config=None,
+                    latency_ms=1.0,
+                )
+
+        report = Report.objects.get(task=task)
+        self.assertEqual(report.content_markdown, report_markdown)
+        self.assertEqual(Citation.objects.filter(report=report).count(), 2)
+
+        conversation.refresh_from_db()
+        recovered_keys = [item["cite_key"] for item in conversation.state_snapshot["citations"]]
+        self.assertEqual(recovered_keys, ["akshare_key", "web_key"])
+
+        present_call.refresh_from_db()
+        self.assertEqual(present_call.step_status, "COMPLETED")
+        self.assertEqual(present_call.detail["completed_by_event_type"], "report_persisted")
+        self.assertEqual(present_call.detail["completed_by_report_id"], report.id)
+
+        detail = get_report_detail(report.id)
+        self.assertEqual([item["cite_key"] for item in detail["citations"]], ["akshare_key", "web_key"])
+        self.assertIn("@misc{akshare_key", detail["references_bibtex"])
+        self.assertIn("@misc{web_key", detail["references_bibtex"])
 
 
 class CrossValidationRuntimeTests(SimpleTestCase):
@@ -666,6 +797,161 @@ class ResearchProgressModelTests(SimpleTestCase):
             [node["event_type"] for node in workflows[0]["nodes"]],
             ["files_presented", "report_presented"],
         )
+
+    def test_tool_batches_after_task_result_become_separate_agent_steps(self):
+        raw_nodes = [
+            _workflow_node_from_log(
+                {
+                    "id": 51,
+                    "step_name": "调用工具: task",
+                    "step_status": "RUNNING",
+                    "detail": {
+                        "event_type": "tool_call",
+                        "id": "call_task_1",
+                        "tool_call_batch_id": "lead:batch-task",
+                    },
+                },
+                0,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 52,
+                    "step_name": "调用工具: task",
+                    "step_status": "RUNNING",
+                    "detail": {
+                        "event_type": "tool_call",
+                        "id": "call_task_2",
+                        "tool_call_batch_id": "lead:batch-task",
+                    },
+                },
+                1,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 53,
+                    "step_name": "工具返回: task",
+                    "step_status": "COMPLETED",
+                    "detail": {
+                        "event_type": "tool_result",
+                        "id": "call_task_1",
+                        "content": "Task succeeded. Result: A",
+                        "tool_call_batch_id": "lead:batch-task",
+                    },
+                },
+                2,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 54,
+                    "step_name": "工具返回: task",
+                    "step_status": "COMPLETED",
+                    "detail": {
+                        "event_type": "tool_result",
+                        "id": "call_task_2",
+                        "content": "Task succeeded. Result: B",
+                        "tool_call_batch_id": "lead:batch-task",
+                    },
+                },
+                3,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 55,
+                    "step_name": "调用工具: akshare_market_data",
+                    "step_status": "RUNNING",
+                    "detail": {
+                        "event_type": "tool_call",
+                        "id": "call_market_1",
+                        "tool_call_batch_id": "lead:batch-market",
+                    },
+                },
+                4,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 56,
+                    "step_name": "工具返回: akshare_market_data",
+                    "step_status": "COMPLETED",
+                    "detail": {
+                        "event_type": "tool_result",
+                        "id": "call_market_1",
+                        "content": "{}",
+                        "tool_call_batch_id": "lead:batch-market",
+                    },
+                },
+                5,
+            ),
+        ]
+
+        _pair_workflow_nodes(raw_nodes)
+        nodes = _collapse_agent_step_nodes(raw_nodes)
+
+        self.assertEqual(len(nodes), 2)
+        self.assertEqual(
+            [tool["tool_name"] for tool in nodes[0]["payload"]["tools"]],
+            ["task", "task"],
+        )
+        self.assertEqual(
+            [tool["tool_name"] for tool in nodes[1]["payload"]["tools"]],
+            ["akshare_market_data"],
+        )
+        self.assertEqual(nodes[0]["payload"]["source_node_ids"], ["51", "52", "53", "54"])
+        self.assertEqual(nodes[1]["payload"]["source_node_ids"], ["55", "56"])
+
+    def test_legacy_tool_batches_split_when_new_call_follows_returns(self):
+        raw_nodes = [
+            _workflow_node_from_log(
+                {
+                    "id": 61,
+                    "step_name": "调用工具: task",
+                    "step_status": "RUNNING",
+                    "detail": {"event_type": "tool_call", "id": "call_task_1"},
+                },
+                0,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 62,
+                    "step_name": "工具返回: task",
+                    "step_status": "COMPLETED",
+                    "detail": {
+                        "event_type": "tool_result",
+                        "id": "call_task_1",
+                        "content": "Task succeeded. Result: A",
+                    },
+                },
+                1,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 63,
+                    "step_name": "调用工具: akshare_market_data",
+                    "step_status": "RUNNING",
+                    "detail": {"event_type": "tool_call", "id": "call_market_1"},
+                },
+                2,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 64,
+                    "step_name": "工具返回: akshare_market_data",
+                    "step_status": "COMPLETED",
+                    "detail": {
+                        "event_type": "tool_result",
+                        "id": "call_market_1",
+                        "content": "{}",
+                    },
+                },
+                3,
+            ),
+        ]
+
+        _pair_workflow_nodes(raw_nodes)
+        nodes = _collapse_agent_step_nodes(raw_nodes)
+
+        self.assertEqual(len(nodes), 2)
+        self.assertEqual(nodes[0]["payload"]["tools"][0]["tool_name"], "task")
+        self.assertEqual(nodes[1]["payload"]["tools"][0]["tool_name"], "akshare_market_data")
 
     def test_dsml_tool_names_extracts_multiple_calls(self):
         names = _dsml_tool_names(
