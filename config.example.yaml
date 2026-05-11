@@ -2,20 +2,20 @@ Debug: false
 
 # Django
 DjangoSecretKey: "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"
-AllowedHosts: ["django.example.com", "127.0.0.1", "localhost"]
-CsrfTrustedOrigins: ["https://django.example.com"]
+AllowedHosts: ["8feet.meteor041.com", "django.meteor041.com", "127.0.0.1", "localhost"]
+CsrfTrustedOrigins: ["https://8feet.meteor041.com", "https://django.meteor041.com"]
 SessionCookieSecure: true
 SessionCookieHttpOnly: true
 SessionCookieSameSite: "Lax"
 CsrfCookieSecure: true
-CsrfCookieDomain: ".example.com"
+CsrfCookieDomain: ".meteor041.com"
 CsrfCookieHttpOnly: false
 CsrfCookieSameSite: "Lax"
 CsrfUseSessions: false
 
 # CORS (生产建议关闭全开放)
 CorsAllowAllOrigins: false
-CorsAllowedOrigins: ["https://app.example.com"]
+CorsAllowedOrigins: ["https://8feet.meteor041.com", "https://django.meteor041.com"]
 
 # Security headers
 SecureSSLRedirect: true

@@ -217,7 +217,7 @@ jobs:
 
           echo "[deploy] waiting for readyz"
           for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:48881/readyz; then
+            if curl -fsS -H 'Host: 8feet.meteor041.com' http://127.0.0.1:48881/readyz; then
               echo
               echo "[deploy] readyz ok"
               exit 0

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-APP_READY_URL="${APP_READY_URL:-http://127.0.0.1:8000/readyz}"
+APP_READY_URL="${APP_READY_URL:-http://127.0.0.1:48881/readyz}"
 ALERT_WEBHOOK_URL="${ALERT_WEBHOOK_URL:-}"
 ALERT_NAME="${ALERT_NAME:-8feet-backend-readyz}"
 
