@@ -585,6 +585,25 @@ class ResearchProgressModelTests(SimpleTestCase):
         self.assertEqual(node["node_kind"], "planning")
         self.assertEqual(node["node_status"], "completed")
 
+    def test_message_nodes_use_reply_text_and_do_not_remain_running(self):
+        node = _workflow_node_from_log(
+            {
+                "id": 12,
+                "step_name": "生成回答",
+                "step_status": "RUNNING",
+                "detail": {
+                    "event_type": "message",
+                    "message": "报告已生成并展示，可进入报告页查看。",
+                },
+            },
+            0,
+        )
+
+        self.assertEqual(node["node_kind"], "llm_message")
+        self.assertEqual(node["node_status"], "completed")
+        self.assertEqual(node["node_name"], "报告已生成并展示，可进入报告页查看。")
+        self.assertEqual(node["summary"], "报告已生成并展示，可进入报告页查看。")
+
     def test_agent_step_status_ignores_planning_status(self):
         status = _agent_step_status(
             [
@@ -952,6 +971,58 @@ class ResearchProgressModelTests(SimpleTestCase):
         self.assertEqual(len(nodes), 2)
         self.assertEqual(nodes[0]["payload"]["tools"][0]["tool_name"], "task")
         self.assertEqual(nodes[1]["payload"]["tools"][0]["tool_name"], "akshare_market_data")
+
+    def test_report_presented_event_is_grouped_with_present_report_tool(self):
+        raw_nodes = [
+            _workflow_node_from_log(
+                {
+                    "id": 71,
+                    "step_name": "调用工具: present_report",
+                    "step_status": "RUNNING",
+                    "detail": {
+                        "event_type": "tool_call",
+                        "id": "call_present",
+                        "tool_call_batch_id": "lead:batch-report",
+                    },
+                },
+                0,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 72,
+                    "step_name": "产出报告",
+                    "step_status": "COMPLETED",
+                    "detail": {
+                        "event_type": "report_presented",
+                        "path": "/mnt/user-data/outputs/research_report.md",
+                        "tool_call_batch_id": "lead:batch-report",
+                    },
+                },
+                1,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 73,
+                    "step_name": "工具返回: present_report",
+                    "step_status": "COMPLETED",
+                    "detail": {
+                        "event_type": "tool_result",
+                        "id": "call_present",
+                        "content": "Successfully presented report.",
+                        "tool_call_batch_id": "lead:batch-report",
+                    },
+                },
+                2,
+            ),
+        ]
+
+        _pair_workflow_nodes(raw_nodes)
+        nodes = _collapse_agent_step_nodes(raw_nodes)
+
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(nodes[0]["node_kind"], "agent_step")
+        self.assertEqual(nodes[0]["payload"]["tools"][0]["tool_name"], "present_report")
+        self.assertEqual(nodes[0]["payload"]["source_node_ids"], ["71", "72", "73"])
 
     def test_dsml_tool_names_extracts_multiple_calls(self):
         names = _dsml_tool_names(

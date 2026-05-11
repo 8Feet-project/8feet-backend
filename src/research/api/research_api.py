@@ -464,7 +464,7 @@ def _message_node_display(detail: dict[str, Any]) -> tuple[str, str, dict[str, A
         }
 
     summary = clean_text or "本轮回复已生成。"
-    return "总结调研结果", summary, {"text": summary}
+    return summary, summary, {"text": summary}
 
 
 def _is_dsml_tool_message(node: dict[str, Any]) -> bool:
@@ -536,7 +536,7 @@ def _workflow_node_from_log(log: dict[str, Any], index: int) -> dict[str, Any]:
     status = (log.get("step_status") or log.get("status") or "completed").lower()
     if status == "paused":
         status = "waiting_user"
-    if node_kind == "planning" and status == "running":
+    if node_kind in {"planning", "llm_message"} and status == "running":
         status = "completed"
     payload = _workflow_payload(detail)
     node_name = step_name
@@ -780,18 +780,19 @@ def _tool_call_batch_end(nodes: list[dict[str, Any]], start: int) -> int:
     first_batch_id = str(nodes[start].get("tool_call_batch_id") or "").strip()
     if first_batch_id:
         index = start
-        while (
-            index < len(nodes)
-            and nodes[index].get("node_kind") in {"tool_call", "tool_return"}
-            and str(nodes[index].get("tool_call_batch_id") or "").strip() == first_batch_id
-        ):
+        while index < len(nodes) and nodes[index].get("node_kind") in {"tool_call", "tool_return", "report_generation"}:
+            if (
+                nodes[index].get("node_kind") != "report_generation"
+                and str(nodes[index].get("tool_call_batch_id") or "").strip() != first_batch_id
+            ):
+                break
             index += 1
         return index
 
     index = start
     while index < len(nodes) and nodes[index].get("node_kind") == "tool_call":
         index += 1
-    while index < len(nodes) and nodes[index].get("node_kind") == "tool_return":
+    while index < len(nodes) and nodes[index].get("node_kind") in {"tool_return", "report_generation"}:
         index += 1
     return index
 
