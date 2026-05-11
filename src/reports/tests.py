@@ -178,3 +178,48 @@ class ReportCitationDetailApiTests(TestCase):
         item_payload = item_response.json()["data"]
         self.assertEqual(item_payload["source_type"], "structured_dataset")
         self.assertIn("ak.car_market_total_cpca", item_payload["reproduction_code"])
+
+    def test_structured_tool_citation_backfills_reproduction_code_from_tool_params(self):
+        self.report.content_markdown = "# 报告\n\n网页来源提供背景信息[@EXAMPLE_SOURCE]，监管检索未发现处罚记录[@CSRC_MARKET_BANS]。"
+        self.report.save(update_fields=["content_markdown"])
+        citation = Citation.objects.create(
+            report=self.report,
+            index_number=2,
+            source_url="",
+            source_title="csrc market_bans data",
+            cited_text_snippet="无市场禁入记录",
+        )
+        ResearchConversation.objects.create(
+            task=self.task,
+            thread_id="thread-csrc-citation",
+            state_snapshot={
+                "citations": [
+                    {
+                        "cite_key": "CSRC_MARKET_BANS",
+                        "title": citation.source_title,
+                        "source_platform": "csrc",
+                        "source_category": "web",
+                        "provider": "csrc",
+                        "tool_name": "csrc_enforcement_data",
+                        "endpoint": "market_bans",
+                        "tool_params": {
+                            "endpoint": "market_bans",
+                            "start_date": "2018-01-01",
+                            "end_date": "2026-12-31",
+                            "keyword": "宁德时代",
+                            "page": 1,
+                            "limit": 5,
+                            "include_content": True,
+                        },
+                    }
+                ]
+            },
+        )
+
+        response = self.client.get(f"/api/v1/reports/{self.report.id}/citations/{citation.id}", secure=True)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["data"]
+        self.assertEqual(payload["source_type"], "structured_financial_data")
+        self.assertIn("csrc_enforcement_data", payload["reproduction_code"])
+        self.assertIn("'keyword': '宁德时代'", payload["reproduction_code"])

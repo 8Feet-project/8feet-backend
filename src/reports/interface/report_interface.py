@@ -35,6 +35,37 @@ def _normalize_cite_key(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def _python_literal(value: Any) -> str:
+    return repr(value)
+
+
+def _structured_tool_reproduction_code(state_item: dict[str, Any]) -> str:
+    if str(state_item.get("url") or "").strip():
+        return ""
+    params = state_item.get("tool_params")
+    if not isinstance(params, dict) or not params:
+        return ""
+    tool_name = str(state_item.get("tool_name") or "").strip()
+    provider = str(state_item.get("provider") or state_item.get("source_platform") or "").strip()
+    if not tool_name:
+        return ""
+    if provider.lower() not in {"akshare", "csrc", "tushare"} and not tool_name.startswith(("akshare", "csrc", "tushare")):
+        return ""
+    rendered_args = ", ".join(
+        f"{_python_literal(key)}: {_python_literal(value)}"
+        for key, value in params.items()
+    )
+    return "\n".join(
+        [
+            "from efeet.tools import get_available_tools",
+            "",
+            f"tool = next(tool for tool in get_available_tools() if tool.name == {_python_literal(tool_name)})",
+            f"result = tool.invoke({{{rendered_args}}})",
+            "print(result)",
+        ]
+    )
+
+
 def get_report_detail(report_id: int, report_mode: str = 'full') -> Optional[dict]:
     """获取报告详情"""
     report = Report.objects.filter(pk=report_id).first()
@@ -328,13 +359,32 @@ def _enrich_citations_from_state(report: Report, citations: list[dict[str, Any]]
                 **item,
                 "cite_key": cite_key,
                 "source_platform": state_item.get("source_platform") or "",
-                "source_type": state_item.get("source_category") or state_item.get("endpoint") or "",
+                "source_type": _source_type_from_state_item(state_item),
                 "accessed_at": state_item.get("accessed_at") or "",
-                "reproduction_code": item.get("reproduction_code") or state_item.get("reproduction_code") or "",
+                "reproduction_code": (
+                    item.get("reproduction_code")
+                    or state_item.get("reproduction_code")
+                    or _structured_tool_reproduction_code(state_item)
+                    or ""
+                ),
                 "bibtex": _render_bibtex_entry(cite_key, item, state_item) if cite_key else "",
             }
         )
     return enriched
+
+
+def _source_type_from_state_item(state_item: dict[str, Any]) -> str:
+    source_category = str(state_item.get("source_category") or "").strip()
+    provider = str(state_item.get("provider") or state_item.get("source_platform") or "").strip().lower()
+    tool_name = str(state_item.get("tool_name") or "").strip().lower()
+    if source_category and source_category != "web":
+        return source_category
+    if not str(state_item.get("url") or "").strip() and (
+        provider in {"akshare", "csrc", "tushare"}
+        or tool_name.startswith(("akshare", "csrc", "tushare"))
+    ):
+        return "structured_financial_data"
+    return source_category or state_item.get("endpoint") or ""
 
 
 def _state_citations_by_url(report: Report) -> dict[str, dict[str, Any]]:
