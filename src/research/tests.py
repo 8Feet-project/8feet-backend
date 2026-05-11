@@ -45,11 +45,14 @@ from research.models import ResearchConversation, ResearchTask, ScrapedContent
 from research.interface.research_interface import infer_object_type
 from research.api.research_api import (
     _agent_step_status,
+    _attach_subagent_workflows,
     _collapse_agent_step_nodes,
     _dsml_tool_names,
     _dsml_report_tool_names,
     _enrich_report_links,
+    _extract_subagent_workflows,
     _is_hidden_workflow_log,
+    _pair_workflow_nodes,
     _progress_model,
     _split_report_message_nodes,
     _task_reference_items,
@@ -553,6 +556,116 @@ class ResearchProgressModelTests(SimpleTestCase):
         self.assertTrue(nodes[1]["payload"]["tools"][0]["hide_payload"])
         self.assertEqual(nodes[1]["payload"]["report_url"], "/report?task_id=9&report_id=8")
         self.assertNotIn("tools", nodes[2]["payload"])
+
+    def test_subagent_report_and_file_events_are_nested_under_task_tool(self):
+        raw_nodes = [
+            _workflow_node_from_log(
+                {
+                    "id": 41,
+                    "step_name": "调用工具: task",
+                    "step_status": "RUNNING",
+                    "detail": {
+                        "event_type": "tool_call",
+                        "id": "call_task_1",
+                        "args": {"description": "委托子代理"},
+                    },
+                },
+                0,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 42,
+                    "step_name": "[subagent-1] 启动子代理",
+                    "step_status": "RUNNING",
+                    "detail": {
+                        "event_type": "subagent_start",
+                        "description": "委托子代理",
+                        "subagent_id": "subagent-1",
+                        "parent_tool_call_id": "call_task_1",
+                        "subagent_type": "researcher",
+                    },
+                },
+                1,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 43,
+                    "step_name": "[subagent-1] 展示文件",
+                    "step_status": "COMPLETED",
+                    "detail": {
+                        "event_type": "files_presented",
+                        "paths": ["/mnt/user-data/outputs/subagent.txt"],
+                        "subagent_id": "subagent-1",
+                        "parent_tool_call_id": "call_task_1",
+                        "subagent_type": "researcher",
+                    },
+                },
+                2,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 44,
+                    "step_name": "[subagent-1] 产出报告",
+                    "step_status": "COMPLETED",
+                    "detail": {
+                        "event_type": "report_presented",
+                        "path": "/mnt/user-data/outputs/subagent.md",
+                        "brief_path": "/mnt/user-data/outputs/subagent_brief.md",
+                        "content_length": 12,
+                        "brief_content_length": 6,
+                        "subagent_id": "subagent-1",
+                        "parent_tool_call_id": "call_task_1",
+                        "subagent_type": "researcher",
+                    },
+                },
+                3,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 45,
+                    "step_name": "[subagent-1] 子代理完成",
+                    "step_status": "COMPLETED",
+                    "detail": {
+                        "event_type": "subagent_complete",
+                        "message": "完成",
+                        "subagent_id": "subagent-1",
+                        "parent_tool_call_id": "call_task_1",
+                        "subagent_type": "researcher",
+                    },
+                },
+                4,
+            ),
+            _workflow_node_from_log(
+                {
+                    "id": 46,
+                    "step_name": "工具返回: task",
+                    "step_status": "COMPLETED",
+                    "detail": {
+                        "event_type": "tool_result",
+                        "id": "call_task_1",
+                        "content": "Task succeeded. Result: 完成",
+                    },
+                },
+                5,
+            ),
+        ]
+
+        subagent_workflows = _extract_subagent_workflows(raw_nodes)
+        _attach_subagent_workflows(raw_nodes, subagent_workflows)
+        raw_nodes = [node for node in raw_nodes if not node.get("_is_subagent_node")]
+        _pair_workflow_nodes(raw_nodes)
+        nodes = _collapse_agent_step_nodes(raw_nodes)
+
+        self.assertEqual(len(nodes), 1)
+        tools = nodes[0]["payload"]["tools"]
+        self.assertEqual(tools[0]["tool_name"], "task")
+        workflows = tools[0]["subagent_workflows"]
+        self.assertEqual(len(workflows), 1)
+        self.assertEqual(workflows[0]["subagent_id"], "subagent-1")
+        self.assertEqual(
+            [node["event_type"] for node in workflows[0]["nodes"]],
+            ["files_presented", "report_presented"],
+        )
 
     def test_dsml_tool_names_extracts_multiple_calls(self):
         names = _dsml_tool_names(

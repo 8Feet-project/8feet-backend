@@ -309,7 +309,7 @@ def _extract_subagent_workflows(nodes: list[dict[str, Any]]) -> dict[str, dict[s
                 "parent_tool_call_id": str(payload.get("parent_tool_call_id") or ""),
                 "nodes": [],
             }
-        workflows[subagent_id]["nodes"].append(node)
+        workflows[subagent_id]["nodes"].append(dict(node))
 
     for workflow in workflows.values():
         _pair_workflow_nodes(workflow["nodes"])

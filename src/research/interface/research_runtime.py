@@ -777,6 +777,7 @@ def _event_to_step(
                 "citation_keys": list(report_event.citation_keys),
                 "run_number": run_number,
                 "event_type": event_type,
+                **_subagent_detail_extra(event),
             },
         )
     if event_type == "files_presented":
@@ -787,6 +788,7 @@ def _event_to_step(
                 "paths": json_safe(event.get("paths", [])),
                 "run_number": run_number,
                 "event_type": event_type,
+                **_subagent_detail_extra(event),
             },
         )
     if event_type in {"message", "subagent_message"}:
