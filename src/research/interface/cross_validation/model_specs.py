@@ -128,6 +128,7 @@ def _resolve_env_model_spec(model_name: str) -> CrossModelSpec:
         provider=_env_first("EFEET_MODEL_PROVIDER", "MODEL_PROVIDER") or "env",
         runtime_config={
             "model": str(model_name),
+            "provider": _env_first("EFEET_MODEL_PROVIDER", "MODEL_PROVIDER") or "env",
             "api_key": api_key,
             "base_url": base_url,
             "debug_provider_http": _env_bool("EFEET_DEBUG_PROVIDER_HTTP", False),
@@ -147,6 +148,7 @@ def _create_model(spec: CrossModelSpec):
         model=str(spec.runtime_config["model"]),
         api_key=str(spec.runtime_config["api_key"]),
         base_url=str(spec.runtime_config["base_url"]),
+        provider=str(spec.runtime_config.get("provider") or spec.provider or ""),
         debug_provider_http=_coerce_bool_value(spec.runtime_config.get("debug_provider_http"), False),
         streaming=_coerce_bool_value(spec.runtime_config.get("streaming"), True),
     )

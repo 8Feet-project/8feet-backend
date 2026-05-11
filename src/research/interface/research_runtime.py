@@ -413,6 +413,7 @@ def _build_task_model(task: ResearchTask):
                 model=runtime_config["model"],
                 api_key=runtime_config["api_key"],
                 base_url=runtime_config["base_url"],
+                provider=runtime_config.get("provider"),
                 debug_provider_http=runtime_config["debug_provider_http"],
                 streaming=bool(runtime_config.get("streaming", True)),
             ),

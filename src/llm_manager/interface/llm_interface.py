@@ -643,6 +643,7 @@ def get_provider_runtime_config(
         None,
         {
             "model": model_name,
+            "provider": config.provider,
             "api_key": api_key,
             "base_url": base_url,
             "debug_provider_http": _coerce_bool_param(params, ("debug_provider_http",), False),

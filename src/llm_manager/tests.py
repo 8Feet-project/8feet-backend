@@ -68,6 +68,7 @@ class ProviderRuntimeConfigTests(SimpleTestCase):
         success, message, runtime = get_provider_runtime_config(config)
 
         self.assertTrue(success)
+        self.assertEqual(runtime["provider"], "OpenAI")
         self.assertIsNone(message)
         self.assertIs(runtime["streaming"], True)
 
