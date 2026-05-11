@@ -39,6 +39,73 @@ def _python_literal(value: Any) -> str:
     return repr(value)
 
 
+CSRC_BASE_URL = "https://www.csrc.gov.cn"
+CSRC_CHANNELS = {
+    "administrative_penalties": {
+        "channel_id": "28de6b87eda140cb93de4dd10d11867d",
+        "source_page": "https://www.csrc.gov.cn/csrc/c101928/common_list.shtml?channelid=28de6b87eda140cb93de4dd10d11867d",
+    },
+    "market_bans": {
+        "channel_id": "e5a95ae5aea54c1f9dde255f21f67799",
+        "source_page": "https://www.csrc.gov.cn/csrc/c101927/common_list.shtml?channelid=e5a95ae5aea54c1f9dde255f21f67799",
+    },
+}
+
+
+def _csrc_reproduction_code(params: dict[str, Any]) -> str:
+    endpoint = str(params.get("endpoint") or "").strip()
+    channel = CSRC_CHANNELS.get(endpoint)
+    if not channel:
+        return ""
+    request_params = {
+        "_isAgg": "true",
+        "_isJson": "true",
+        "_pageSize": str(params.get("limit") or 5),
+        "_template": "index",
+        "_rangeTimeGte": str(params.get("start_date") or ""),
+        "_channelName": "",
+        "page": str(params.get("page") or 1),
+    }
+    request_url = f"{CSRC_BASE_URL}/searchList/{channel['channel_id']}"
+    return "\n".join(
+        [
+            "import re",
+            "import requests",
+            "",
+            f"endpoint = {_python_literal(endpoint)}",
+            f"keyword = {_python_literal(params.get('keyword') or '')}",
+            f"end_date = {_python_literal(params.get('end_date') or '')}",
+            f"include_content = {_python_literal(bool(params.get('include_content', True)))}",
+            f"url = {_python_literal(request_url)}",
+            f"source_page = {_python_literal(channel['source_page'])}",
+            f"params = {_python_literal(request_params)}",
+            "response = requests.get(url, params=params, headers={'User-Agent': 'Mozilla/5.0', 'Referer': source_page}, timeout=20)",
+            "response.raise_for_status()",
+            "rows = response.json().get('data', {}).get('results', [])",
+            "records = []",
+            "for row in rows:",
+            "    published = str(row.get('publishedTimeStr', ''))",
+            "    published_date = published.split(' ')[0] if published else ''",
+            "    if end_date and published_date and published_date > end_date:",
+            "        continue",
+            "    title = str(row.get('title', ''))",
+            "    summary = str(row.get('memo', '')).strip()",
+            "    content_text = re.sub(r'\\s+', ' ', re.sub(r'<[^>]+>', ' ', str(row.get('contentHtml', '')))).strip()",
+            "    searchable = f'{title}\\n{summary}\\n{content_text}'.lower()",
+            "    if keyword and keyword.lower() not in searchable:",
+            "        continue",
+            "    source_url = str(row.get('url') or '')",
+            "    if source_url.startswith('/'):",
+            f"        source_url = {_python_literal(CSRC_BASE_URL)} + source_url",
+            "    record = {'title': title, 'published_time': published or None, 'url': source_url, 'summary': summary, 'manuscript_id': row.get('manuscriptId')}",
+            "    if include_content:",
+            "        record['content_text'] = content_text",
+            "    records.append(record)",
+            "print(records)",
+        ]
+    )
+
+
 def _structured_tool_reproduction_code(state_item: dict[str, Any]) -> str:
     if str(state_item.get("url") or "").strip():
         return ""
@@ -49,21 +116,9 @@ def _structured_tool_reproduction_code(state_item: dict[str, Any]) -> str:
     provider = str(state_item.get("provider") or state_item.get("source_platform") or "").strip()
     if not tool_name:
         return ""
-    if provider.lower() not in {"akshare", "csrc", "tushare"} and not tool_name.startswith(("akshare", "csrc", "tushare")):
-        return ""
-    rendered_args = ", ".join(
-        f"{_python_literal(key)}: {_python_literal(value)}"
-        for key, value in params.items()
-    )
-    return "\n".join(
-        [
-            "from efeet.tools import get_available_tools",
-            "",
-            f"tool = next(tool for tool in get_available_tools() if tool.name == {_python_literal(tool_name)})",
-            f"result = tool.invoke({{{rendered_args}}})",
-            "print(result)",
-        ]
-    )
+    if provider.lower() == "csrc" and tool_name == "csrc_enforcement_data":
+        return _csrc_reproduction_code(params)
+    return ""
 
 
 def get_report_detail(report_id: int, report_mode: str = 'full') -> Optional[dict]:

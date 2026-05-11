@@ -221,5 +221,7 @@ class ReportCitationDetailApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()["data"]
         self.assertEqual(payload["source_type"], "structured_financial_data")
-        self.assertIn("csrc_enforcement_data", payload["reproduction_code"])
-        self.assertIn("'keyword': '宁德时代'", payload["reproduction_code"])
+        self.assertIn("requests.get", payload["reproduction_code"])
+        self.assertIn("www.csrc.gov.cn/searchList", payload["reproduction_code"])
+        self.assertIn("keyword = '宁德时代'", payload["reproduction_code"])
+        self.assertNotIn("efeet.tools", payload["reproduction_code"])
