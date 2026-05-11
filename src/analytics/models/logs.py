@@ -72,6 +72,10 @@ class SystemLog(models.Model):
         verbose_name = '系统日志'
         verbose_name_plural = verbose_name
         ordering = ['-created_at']
+        permissions = [
+            ('view_audit_log', '查看系统日志'),
+            ('export_audit_log', '导出系统日志'),
+        ]
 
 
 class LLMCallLog(models.Model):

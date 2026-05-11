@@ -36,7 +36,7 @@ def _serialize_system_log(log):
     }
 
 @response_wrapper
-@jwt_auth(perms=['analytics.view_dashboard'])
+@jwt_auth(perms=['analytics.view_audit_log'])
 def log_list(request):
     operation_logs = [_serialize_operation_log(item) for item in OperationLog.objects.select_related("user").all()[:100]]
     system_logs = [_serialize_system_log(item) for item in SystemLog.objects.all()[:100]]
@@ -45,7 +45,7 @@ def log_list(request):
 
 
 @response_wrapper
-@jwt_auth(perms=['analytics.view_dashboard'])
+@jwt_auth(perms=['analytics.view_audit_log'])
 def log_detail(request, log_id: str):
     if log_id.startswith("op-"):
         raw_id = log_id.removeprefix("op-")
@@ -78,13 +78,13 @@ def log_detail(request, log_id: str):
 
 
 @response_wrapper
-@jwt_auth(perms=['analytics.view_dashboard'])
+@jwt_auth(perms=['analytics.export_audit_log'])
 def log_export(request):
     return success_api_response({"export_id": "logs-latest", "status": "completed"})
 
 
 @response_wrapper
-@jwt_auth(perms=['analytics.view_dashboard'])
+@jwt_auth(perms=['analytics.export_audit_log'])
 def log_export_status(request, export_id: str):
     return success_api_response({
         "export_id": export_id,

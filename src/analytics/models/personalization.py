@@ -83,6 +83,9 @@ class Alert(models.Model):
         db_table = 'alert_setting'
         verbose_name = '推送提醒设置'
         verbose_name_plural = verbose_name
+        permissions = [
+            ('create_alert', '创建动态提醒'),
+        ]
 
 
 class UserMessage(models.Model):

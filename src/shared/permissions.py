@@ -23,6 +23,7 @@ ROLE_PERMISSIONS = {
         # 统计与日志
         'analytics.view_dashboard',
         'analytics.view_audit_log',
+        'analytics.export_audit_log',
         # 所有业务权限
         'research.create_research',
         'research.view_research',
@@ -78,7 +79,8 @@ PRODUCT_PERMISSION_MAP = {
     'llm_manager.view_llmconfig': ['admin:model:read'],
     'llm_manager.change_llmconfig': ['admin:model:write', 'admin:model:permission'],
     'analytics.view_dashboard': ['admin:dashboard:read'],
-    'analytics.view_audit_log': ['admin:logs:read', 'admin:logs:export'],
+    'analytics.view_audit_log': ['admin:logs:read'],
+    'analytics.export_audit_log': ['admin:logs:export'],
     'research.create_research': ['research:task:create'],
     'research.view_research': ['research:task:read'],
     'research.cancel_research': ['research:task:cancel'],
@@ -181,16 +183,29 @@ def setup_groups():
     可在数据迁移或 manage.py 命令中调用。
     确保幂等: 重复执行不会重复创建。
     """
+    missing_permissions = []
+    resolved_permissions = {}
     for role, perm_codes in ROLE_PERMISSIONS.items():
+        resolved_permissions[role] = []
+        for perm_str in perm_codes:
+            perm = _parse_perm(perm_str)
+            if not perm:
+                missing_permissions.append(f'{role}:{perm_str}')
+                continue
+            resolved_permissions[role].append(perm)
+
+    if missing_permissions:
+        raise ValueError(
+            'ROLE_PERMISSIONS references missing Django permissions: '
+            + ', '.join(missing_permissions)
+        )
+
+    for role, permissions in resolved_permissions.items():
         group_name = ROLE_GROUP_MAP[role]
         group, _ = Group.objects.get_or_create(name=group_name)
 
         # 清空旧权限后重新赋值，保证与 ROLE_PERMISSIONS 配置同步
-        group.permissions.clear()
-        for perm_str in perm_codes:
-            perm = _parse_perm(perm_str)
-            if perm:
-                group.permissions.add(perm)
+        group.permissions.set(permissions)
 
 
 def assign_user_to_role_group(user, role: str):
