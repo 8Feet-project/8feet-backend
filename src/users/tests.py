@@ -3,9 +3,16 @@ import jwt
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
+from unittest.mock import Mock, patch
 
 from users.interface.persona_interface import save_user_persona_report, should_prompt_persona
+from users.interface.persona_runtime import (
+    PERSONA_TOOLS,
+    build_persona_system_message,
+    run_persona_turn,
+)
 from users.models.persona import UserPersona
+from users.models.persona import UserPersonaConversation
 from users.models.user_profile import ROLE_SUPER_ADMIN, ROLE_USER, UserProfile
 
 
@@ -100,3 +107,65 @@ class UserPersonaRegistrationTests(TestCase):
         self.assertEqual(result["role"], ROLE_USER)
         self.assertTrue(result["should_prompt_persona"])
         self.assertFalse(UserPersona.objects.filter(user__username="regular").exists())
+
+
+class UserPersonaRuntimeTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="persona-runtime",
+            password="test-pass-123",
+            email="runtime@example.com",
+        )
+        UserProfile.objects.create(user=self.user, role=ROLE_USER, nickname="runtime")
+
+    def test_persona_tools_are_limited_to_required_tools(self):
+        self.assertEqual(
+            [tool.name for tool in PERSONA_TOOLS],
+            ["web_search", "web_fetch", "write_file", "present_report"],
+        )
+
+    def test_system_message_includes_previous_persona(self):
+        system_message = build_persona_system_message("# 旧人设\n\n关注财务质量。")
+
+        self.assertIn("上一次的用户人设", system_message)
+        self.assertIn("关注财务质量", system_message)
+        self.assertIn("有且仅有 web_search、web_fetch、write_file、present_report", system_message)
+
+    def test_presented_report_overwrites_user_persona(self):
+        conversation = UserPersonaConversation.objects.create(
+            user=self.user,
+            thread_id="persona-thread",
+            model_id="1",
+            system_message="persona system",
+        )
+        fake_report = Mock()
+        fake_report.path = "/mnt/user-data/outputs/user_persona.md"
+        fake_report.content = "# 用户调研人设分析\n\n偏好产业链与风险分析。"
+        fake_thread = Mock()
+        fake_thread.history = []
+        fake_thread.state = {
+            "presented_reports": [
+                {
+                    "path": fake_report.path,
+                    "content": fake_report.content,
+                    "brief_path": "/mnt/user-data/outputs/user_persona_brief.md",
+                    "brief_content": "偏好产业链与风险分析。",
+                }
+            ]
+        }
+        fake_thread.max_turns = 30
+        fake_thread.stream.return_value = ["已完成人设分析。"]
+
+        with (
+            patch("users.interface.persona_runtime._resolve_persona_config", return_value=Mock(id=1)),
+            patch("users.interface.persona_runtime._build_model", return_value=Mock()),
+            patch("users.interface.persona_runtime.Thread", return_value=fake_thread),
+            patch("users.interface.persona_runtime.extract_presented_reports", side_effect=[[], [fake_report]]),
+        ):
+            success, message, payload = run_persona_turn(conversation, "继续")
+
+        self.assertTrue(success, message)
+        self.assertEqual(payload["status"], "completed")
+        persona = UserPersona.objects.get(user=self.user)
+        self.assertIn("偏好产业链与风险分析", persona.content_markdown)
+        self.assertEqual(persona.source_thread_id, "persona-thread")

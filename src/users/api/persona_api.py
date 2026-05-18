@@ -12,6 +12,7 @@ from users.interface.persona_interface import (
     serialize_user_persona,
     skip_user_persona_prompt,
 )
+from users.interface.persona_runtime import continue_persona_conversation, start_persona_conversation
 
 
 @response_wrapper
@@ -33,6 +34,35 @@ def persona_skip(request: HttpRequest):
 @jwt_auth()
 def persona_clear(request: HttpRequest):
     return success_api_response(clear_user_persona(request.user))
+
+
+@response_wrapper
+@require_POST
+@jwt_auth()
+def persona_conversation_start(request: HttpRequest):
+    payload = request_data(request)
+    success, message, data = start_persona_conversation(
+        request.user,
+        model_id=payload.get("model_id"),
+    )
+    if not success:
+        return missing_runtime_response(message or "启动人设设定失败")
+    return success_api_response(data)
+
+
+@response_wrapper
+@require_POST
+@jwt_auth()
+def persona_conversation_message(request: HttpRequest, thread_id: str):
+    payload = request_data(request)
+    success, message, data = continue_persona_conversation(
+        request.user,
+        thread_id=thread_id,
+        message=payload.get("message") or "",
+    )
+    if not success:
+        return missing_runtime_response(message or "发送人设设定消息失败")
+    return success_api_response(data)
 
 
 def request_data(request: HttpRequest) -> dict:
