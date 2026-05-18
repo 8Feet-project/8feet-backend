@@ -194,6 +194,12 @@ def _request_data(request: HttpRequest) -> dict:
     return request.POST
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _workflow_node_kind(event_type: str) -> str:
     normalized = (event_type or "").strip().lower()
     if normalized == "step_approval":
@@ -1051,9 +1057,11 @@ def create_task(request: HttpRequest):
             search_params = {}
     if not isinstance(search_params, dict):
         search_params = {}
-    for key in ('time_range', 'source_authority', 'source_types', 'multi_model_ids', 'enable_cross_validation'):
+    for key in ('time_range', 'source_authority', 'source_types', 'multi_model_ids', 'enable_cross_validation', 'auto_advance'):
         if key in data and data.get(key) is not None:
             search_params[key] = data.get(key)
+    if "auto_advance" in search_params:
+        search_params["auto_advance"] = _coerce_bool(search_params.get("auto_advance"))
 
     try:
         parsed_llm_config_id = int(llm_config_id) if llm_config_id else None
@@ -1131,8 +1139,26 @@ def task_status(request: HttpRequest, task_id: int):
         "object_name": task.object_name,
         "object_type": _frontend_object_type(task.object_type),
         "waiting_intervention": task.status == "WAITING_USER",
+        "auto_advance": _coerce_bool((task.search_params or {}).get("auto_advance")),
         "metrics_summary": [],
         "available_actions": ["cancel"] if task.status not in ("COMPLETED", "FAILED", "CANCELLED") else [],
+    })
+
+
+@response_wrapper
+@require_POST
+@jwt_auth(perms=['research.create_research'])
+def task_auto_advance(request: HttpRequest, task_id: int):
+    task = _get_user_task(task_id, request.user.id)
+    if not task:
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
+    data = _request_data(request)
+    auto_advance = _coerce_bool(data.get("auto_advance"))
+    task.search_params = {**(task.search_params or {}), "auto_advance": auto_advance}
+    task.save(update_fields=["search_params", "updated_at"])
+    return success_api_response({
+        "task_id": str(task.id),
+        "auto_advance": auto_advance,
     })
 
 

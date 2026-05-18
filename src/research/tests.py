@@ -50,6 +50,7 @@ from research.interface.research_interface import infer_object_type, respond_to_
 from research.api.research_api import (
     _agent_step_status,
     _attach_subagent_workflows,
+    _coerce_bool,
     _collapse_agent_step_nodes,
     _dsml_tool_names,
     _dsml_report_tool_names,
@@ -735,6 +736,12 @@ class ResearchProgressModelTests(SimpleTestCase):
         self.assertEqual(node["summary"], "先覆盖核心业务，再安排证据检索。")
         self.assertEqual(node["payload"]["next_action"], "拆解调研维度")
         self.assertEqual(node["payload"]["approval_options"], ["accept", "replan", "reject"])
+
+    def test_coerce_bool_accepts_toggle_payload_values(self):
+        self.assertTrue(_coerce_bool(True))
+        self.assertTrue(_coerce_bool("true"))
+        self.assertFalse(_coerce_bool(False))
+        self.assertFalse(_coerce_bool("false"))
 
     def test_dsml_report_message_becomes_light_agent_step(self):
         message = (
