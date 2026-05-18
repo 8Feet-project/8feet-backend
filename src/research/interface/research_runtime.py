@@ -197,6 +197,112 @@ def _build_execution_constraints(search_params: dict[str, Any] | None) -> str:
     return "\n".join(lines) + "\n"
 
 
+TIME_RANGE_LABELS = {
+    "7d": "近 7 天",
+    "30d": "近 30 天",
+    "90d": "近 90 天",
+    "1y": "近 1 年",
+}
+
+SOURCE_AUTHORITY_LABELS = {
+    "authoritative": "权威",
+    "high": "权威",
+    "strict": "权威",
+    "balanced": "中等",
+    "medium": "中等",
+    "mid": "中等",
+    "moderate": "中等",
+    "unrestricted": "无限制",
+    "unlimited": "无限制",
+    "any": "无限制",
+}
+
+SOURCE_AUTHORITY_GUIDANCE = {
+    "权威": "优先使用官方披露、监管机构、交易所、公司官网、可复现结构化数据等高权威来源。",
+    "中等": "优先高可信来源，同时允许主流媒体、行业报告和专业数据库作为交叉验证材料。",
+    "无限制": "不限制来源范围，但低可信来源只能作为线索，必须在报告中明确标注不确定性并交叉核验。",
+}
+
+SOURCE_TYPE_LABELS = {
+    "official": "官方披露",
+    "regulator": "监管/交易所",
+    "exchange": "监管/交易所",
+    "data": "结构化数据",
+    "structured": "结构化数据",
+    "structured_financial_data": "结构化数据",
+    "research": "研报分析",
+    "report": "研报分析",
+    "news": "新闻舆情",
+    "media": "新闻舆情",
+}
+
+RESEARCH_FOCUS_LABELS = {
+    "overview": "综合调研",
+    "finance": "财务经营",
+    "competition": "竞争格局",
+    "risk": "风险合规",
+    "recent": "近期动态",
+}
+
+
+def _coerce_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, tuple):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
+def _label_from_mapping(value: Any, mapping: dict[str, str]) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return mapping.get(raw.lower(), raw)
+
+
+def _labels_from_mapping(values: Any, mapping: dict[str, str]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for value in _coerce_list(values):
+        label = _label_from_mapping(value, mapping)
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return labels
+
+
+def _build_user_source_requirements(search_params: dict[str, Any] | None) -> str:
+    params = search_params or {}
+    user_requirements = params.get("user_source_requirements")
+    if not isinstance(user_requirements, dict):
+        user_requirements = {}
+    merged = {**params, **user_requirements}
+
+    time_range = _label_from_mapping(merged.get("time_range"), TIME_RANGE_LABELS)
+    source_authority = _label_from_mapping(merged.get("source_authority"), SOURCE_AUTHORITY_LABELS)
+    source_types = _labels_from_mapping(merged.get("source_types"), SOURCE_TYPE_LABELS)
+    research_focus = _labels_from_mapping(merged.get("research_focus"), RESEARCH_FOCUS_LABELS)
+
+    lines = ["用户配置要求:"]
+    if time_range:
+        lines.append(f"- 时间范围: {time_range}。")
+    if source_types:
+        lines.append(f"- 信息源类型: {'、'.join(source_types)}。")
+    if source_authority:
+        guidance = SOURCE_AUTHORITY_GUIDANCE.get(source_authority)
+        suffix = f" {guidance}" if guidance else ""
+        lines.append(f"- 子项信息来源要求: {source_authority}。{suffix}")
+    if research_focus:
+        lines.append(f"- 调研重点: {'、'.join(research_focus)}。")
+    if len(lines) == 1:
+        return ""
+    lines.append("- 请把以上内容视为用户对检索和选源的要求；若证据不足，请在报告中说明来源局限。")
+    return "\n".join(lines) + "\n"
+
+
 def build_initial_prompt(task: ResearchTask) -> str:
     """把任务字段转换为首轮研究 prompt。"""
     search_params = json.dumps(
@@ -227,6 +333,7 @@ def build_initial_prompt(task: ResearchTask) -> str:
         f"{step_approval_requirements(_auto_advance_enabled(task.search_params))}\n"
         f"{citation_contract}\n"
         f"{report_contract}\n"
+        f"{_build_user_source_requirements(task.search_params)}\n"
         f"{_build_execution_constraints(task.search_params)}\n"
         f"补充检索参数:\n```json\n{search_params}\n```"
     )

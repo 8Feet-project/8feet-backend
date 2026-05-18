@@ -45,6 +45,7 @@ from research.interface.research_runtime import (
     _record_auto_step_approval,
     build_initial_prompt,
     build_research_system_message,
+    _build_user_source_requirements,
     _resolve_max_turns,
 )
 from research.models import ResearchConversation, ResearchTask, ScrapedContent, TaskStepLog
@@ -129,6 +130,43 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
                 self.assertIn(title, prompt)
                 self.assertIn(first_dimension, prompt)
                 self.assertIn(second_dimension, prompt)
+
+    def test_initial_prompt_includes_user_source_requirements(self):
+        task = SimpleNamespace(
+            title="带配置调研",
+            object_name="Acme",
+            object_type="COMPANY",
+            search_params={
+                "user_source_requirements": {
+                    "time_range": "90d",
+                    "source_authority": "authoritative",
+                    "source_types": ["official", "data", "news"],
+                    "research_focus": ["finance", "risk"],
+                }
+            },
+        )
+
+        prompt = build_initial_prompt(task)
+
+        self.assertIn("用户配置要求", prompt)
+        self.assertIn("时间范围: 近 90 天", prompt)
+        self.assertIn("信息源类型: 官方披露、结构化数据、新闻舆情", prompt)
+        self.assertIn("子项信息来源要求: 权威", prompt)
+        self.assertIn("调研重点: 财务经营、风险合规", prompt)
+        self.assertIn("把以上内容视为用户对检索和选源的要求", prompt)
+
+    def test_user_source_requirements_supports_legacy_top_level_fields(self):
+        text = _build_user_source_requirements(
+            {
+                "time_range": "30d",
+                "source_authority": "unrestricted",
+                "source_types": ["report"],
+            }
+        )
+
+        self.assertIn("时间范围: 近 30 天", text)
+        self.assertIn("子项信息来源要求: 无限制", text)
+        self.assertIn("信息源类型: 研报分析", text)
 
     def test_object_type_contract_falls_back_to_generic_business_object(self):
         contract = object_type_research_requirements("UNKNOWN")

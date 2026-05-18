@@ -1078,7 +1078,15 @@ def create_task(request: HttpRequest):
             search_params = {}
     if not isinstance(search_params, dict):
         search_params = {}
-    for key in ('time_range', 'source_authority', 'source_types', 'multi_model_ids', 'enable_cross_validation', 'auto_advance'):
+    for key in (
+        'time_range',
+        'source_authority',
+        'source_types',
+        'user_source_requirements',
+        'multi_model_ids',
+        'enable_cross_validation',
+        'auto_advance',
+    ):
         if key in data and data.get(key) is not None:
             search_params[key] = data.get(key)
     if "auto_advance" in search_params:
