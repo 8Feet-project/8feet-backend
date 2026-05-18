@@ -29,6 +29,7 @@ from research.interface.cross_validation_runtime import (
 )
 from research.models import ResearchTask, ScrapedContent, TaskStepLog
 from research.interface.thread_codec import content_to_text
+from efeet.references import authority_display_label, authority_tier_for_score, normalize_authority_score
 
 
 def _frontend_status(status: str) -> str:
@@ -998,6 +999,8 @@ def _task_reference_items(task: ResearchTask) -> list[dict[str, Any]]:
         if not identity or identity in seen_keys:
             continue
         seen_keys.add(identity)
+        authority_score = normalize_authority_score(citation.get("authority_score"))
+        authority_tier = str(citation.get("authority_tier", "") or "") or authority_tier_for_score(authority_score)
         items.append(
             {
                 "reference_id": cite_key or f"source-{index}",
@@ -1007,8 +1010,10 @@ def _task_reference_items(task: ResearchTask) -> list[dict[str, Any]]:
                 "url": url,
                 "source_platform": str(citation.get("source_platform", "") or ""),
                 "source_type": str(citation.get("source_category", "") or citation.get("endpoint", "") or ""),
-                "authority_score": citation.get("authority_score"),
-                "authority_tier": str(citation.get("authority_tier", "") or ""),
+                "authority_score": authority_score,
+                "authority_tier": authority_tier,
+                "authority_label": authority_display_label(authority_score),
+                "authority_reason": str(citation.get("authority_reason", "") or ""),
                 "summary": content_to_text(
                     citation.get("summary")
                     or citation.get("note")
@@ -1028,8 +1033,10 @@ def _task_reference_items(task: ResearchTask) -> list[dict[str, Any]]:
         return items
 
     rows = ScrapedContent.objects.filter(task_id=task.id).order_by("-relevance_score", "id")
-    return [
-        {
+    result = []
+    for index, row in enumerate(rows, start=1):
+        authority_score = normalize_authority_score(row.relevance_score)
+        result.append({
             "reference_id": f"source-{index}",
             "cite_key": "",
             "index_number": index,
@@ -1037,14 +1044,15 @@ def _task_reference_items(task: ResearchTask) -> list[dict[str, Any]]:
             "url": row.source_url,
             "source_platform": "",
             "source_type": row.source_type,
-            "authority_score": row.relevance_score,
-            "authority_tier": "",
+            "authority_score": authority_score,
+            "authority_tier": authority_tier_for_score(authority_score),
+            "authority_label": authority_display_label(authority_score),
+            "authority_reason": "历史抓取记录按现有相关度折算为 5 档权威度",
             "summary": content_to_text(row.content_text)[:500],
             "evidence_path": "",
             "accessed_at": row.scraped_at.isoformat() if row.scraped_at else "",
-        }
-        for index, row in enumerate(rows, start=1)
-    ]
+        })
+    return result
 
 
 @response_wrapper
