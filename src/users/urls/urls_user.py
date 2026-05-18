@@ -3,6 +3,7 @@
 """
 from django.urls import path
 from users.api.auth import get_profile, update_profile, change_password
+from users.api.persona_api import persona_clear, persona_detail, persona_skip
 
 urlpatterns = [
     path('me', get_profile, name='user-me'),
@@ -10,4 +11,7 @@ urlpatterns = [
     # Document says PATCH /api/v1/users/me
     # Doc also has /api/v1/users/me/password
     path('me/password', change_password, name='user-change-password'),
+    path('me/persona', persona_detail, name='user-persona-detail'),
+    path('me/persona/skip', persona_skip, name='user-persona-skip'),
+    path('me/persona/clear', persona_clear, name='user-persona-clear'),
 ]

@@ -1,0 +1,102 @@
+import jwt
+
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.test import Client, TestCase
+
+from users.interface.persona_interface import save_user_persona_report, should_prompt_persona
+from users.models.persona import UserPersona
+from users.models.user_profile import ROLE_SUPER_ADMIN, ROLE_USER, UserProfile
+
+
+class UserPersonaApiTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="persona-user",
+            password="test-pass-123",
+            email="persona@example.com",
+        )
+        UserProfile.objects.create(user=self.user, role=ROLE_USER, nickname="persona-user")
+        token = jwt.encode(
+            {"user_id": self.user.id, "type": "access_token"},
+            settings.SECRET_KEY,
+            algorithm="HS256",
+        )
+        self.client = Client(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+    def test_persona_detail_prompts_when_empty(self):
+        response = self.client.get("/api/v1/users/me/persona", secure=True)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["data"]
+        self.assertFalse(payload["has_persona"])
+        self.assertTrue(payload["should_prompt_persona"])
+
+    def test_skip_persona_prompt(self):
+        response = self.client.post("/api/v1/users/me/persona/skip", secure=True)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["data"]
+        self.assertFalse(payload["should_prompt_persona"])
+        self.assertIsNotNone(payload["skipped_at"])
+
+    def test_clear_keeps_prompt_available_for_regular_user(self):
+        save_user_persona_report(
+            user=self.user,
+            content_markdown="# 用户人设\n\n偏好深度财务分析。",
+            source_thread_id="thread-1",
+            model_id="1",
+        )
+
+        response = self.client.post("/api/v1/users/me/persona/clear", secure=True)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["data"]
+        self.assertFalse(payload["has_persona"])
+        self.assertEqual(payload["content_markdown"], "")
+        self.assertTrue(payload["should_prompt_persona"])
+
+    def test_super_admin_is_not_prompted(self):
+        self.user.profile.role = ROLE_SUPER_ADMIN
+        self.user.profile.save(update_fields=["role"])
+
+        self.assertFalse(should_prompt_persona(self.user))
+
+
+class UserPersonaRegistrationTests(TestCase):
+    def test_first_registered_super_admin_not_prompted(self):
+        ok, message, result = __import__(
+            "users.interface.auth_interface",
+            fromlist=["register_user"],
+        ).register_user(
+            "first-admin",
+            "First Admin",
+            "test-pass-123",
+            "first@example.com",
+            email_verified=True,
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(result["role"], ROLE_SUPER_ADMIN)
+        self.assertFalse(result["should_prompt_persona"])
+
+    def test_regular_registered_user_is_prompted(self):
+        User = get_user_model()
+        admin = User.objects.create_user(username="admin", password="test-pass-123")
+        UserProfile.objects.create(user=admin, role=ROLE_SUPER_ADMIN)
+
+        ok, message, result = __import__(
+            "users.interface.auth_interface",
+            fromlist=["register_user"],
+        ).register_user(
+            "regular",
+            "Regular",
+            "test-pass-123",
+            "regular@example.com",
+            email_verified=True,
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(result["role"], ROLE_USER)
+        self.assertTrue(result["should_prompt_persona"])
+        self.assertFalse(UserPersona.objects.filter(user__username="regular").exists())

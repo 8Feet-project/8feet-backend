@@ -21,6 +21,7 @@ from users.interface.auth_interface import (
     confirm_password_reset, update_user_profile, change_user_password, blacklist_token,
     revoke_refresh_token,
 )
+from users.interface.persona_interface import serialize_user_persona, should_prompt_persona
 
 
 def _serialize_current_user(user):
@@ -36,7 +37,9 @@ def _serialize_current_user(user):
         "role": profile.role if profile else "user",
         "permissions": to_product_permission_codes(user.get_all_permissions()),
         "email_verified": profile.email_verified if profile else False,
-        "last_login_at": user.last_login.isoformat() if user.last_login else None
+        "last_login_at": user.last_login.isoformat() if user.last_login else None,
+        "persona": serialize_user_persona(user),
+        "should_prompt_persona": should_prompt_persona(user),
     }
 
 

@@ -108,6 +108,7 @@ def register_user(
                 "user_id": user.id,
                 "role": role,
                 "need_initialize": is_first_user,
+                "should_prompt_persona": not is_first_user,
                 **get_token_dict(user)
             }
             return True, "注册成功", data
@@ -148,6 +149,7 @@ def _perform_login(user, password) -> Tuple[bool, Optional[str], Optional[dict]]
     user.save()
 
     profile = getattr(user, 'profile', None)
+    from users.interface.persona_interface import should_prompt_persona
     
     tokens = get_token_dict(user)
     data = {
@@ -155,6 +157,7 @@ def _perform_login(user, password) -> Tuple[bool, Optional[str], Optional[dict]]
         "nickname": profile.nickname if profile else user.get_full_name(),
         "role": profile.role if profile else "user",
         "permissions": to_product_permission_codes(user.get_all_permissions()),
+        "should_prompt_persona": should_prompt_persona(user),
         **tokens
     }
     return True, None, data
