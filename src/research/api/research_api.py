@@ -1047,7 +1047,7 @@ def _task_reference_items(task: ResearchTask) -> list[dict[str, Any]]:
             "authority_score": authority_score,
             "authority_tier": authority_tier_for_score(authority_score),
             "authority_label": authority_display_label(authority_score),
-            "authority_reason": "历史抓取记录按现有相关度折算为 5 档权威度",
+            "authority_reason": "历史抓取记录按现有相关度折算为分级权威度",
             "summary": content_to_text(row.content_text)[:500],
             "evidence_path": "",
             "accessed_at": row.scraped_at.isoformat() if row.scraped_at else "",
