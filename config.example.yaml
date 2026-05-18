@@ -55,6 +55,9 @@ S3Address: "localhost:48884"
 S3BucketReports: eightfeet-reports
 S3UseSSL: false
 
+# Report exports
+ReportExportRoot: "./generated_reports"
+
 # Mail (optional)
 # 常见配置:
 # 1. SMTPS 直连: SmtpPort=465, SmtpUseSsl=true, SmtpUseTls=false

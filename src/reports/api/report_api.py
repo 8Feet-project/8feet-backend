@@ -3,8 +3,10 @@
 映射需求: FR-DYBG-0002 ~ FR-DYBG-0004, FR-JSDY-0005
 """
 import json
+import mimetypes
+from pathlib import Path
 
-from django.http import HttpRequest
+from django.http import FileResponse, Http404, HttpRequest
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_GET, require_POST
@@ -20,7 +22,9 @@ from reports.interface.report_interface import (
     export_report_file, get_export_record, trigger_manual_export,
     append_report_followup,
 )
+from reports.interface.storage_utils import report_file_path
 from reports.models.citation import Citation, ReportFollowup
+from reports.models.export_record import ReportExportRecord
 from reports.tasks import export_report_task
 
 
@@ -143,6 +147,36 @@ def export_status(request: HttpRequest, export_id: str):
     if not data:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "导出记录不存在")
     return success_api_response(data)
+
+
+@response_wrapper
+@require_GET
+@jwt_auth(perms=['reports.view_report'])
+def export_download(request: HttpRequest, export_id: str):
+    """下载导出的报告文件
+    [route]: GET /api/v1/reports/exports/{export_id}/download
+    """
+    try:
+        parsed_export_id = int(export_id)
+    except (TypeError, ValueError):
+        raise Http404("导出记录不存在")
+
+    record = (
+        ReportExportRecord.objects
+        .select_related('report')
+        .filter(pk=parsed_export_id, status='COMPLETED')
+        .first()
+    )
+    if not record or not record.storage_path:
+        raise Http404("导出文件不存在")
+
+    file_path = report_file_path(record.storage_path)
+    if not file_path.exists() or not file_path.is_file():
+        raise Http404("导出文件不存在")
+
+    filename = Path(file_path).name
+    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return FileResponse(open(file_path, "rb"), as_attachment=True, filename=filename, content_type=content_type)
 
 
 @response_wrapper

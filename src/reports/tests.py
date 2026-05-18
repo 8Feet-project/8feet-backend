@@ -1,11 +1,14 @@
 import jwt
+import tempfile
+from pathlib import Path
 
 from django.conf import settings
 from django.contrib.auth.models import Permission
 from django.contrib.auth import get_user_model
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from unittest.mock import Mock, patch
 
+from reports.interface.report_interface import export_report_file, run_export_job
 from reports.models.citation import Citation, ReportFollowup
 from reports.models.report import Report
 from research.models.conversation import ResearchConversation
@@ -277,3 +280,31 @@ class ReportCitationDetailApiTests(TestCase):
             queued_step_name="开始处理追问",
             run_metadata={"report_followup_id": followup.id},
         )
+
+    def test_report_export_download_serves_local_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(REPORT_EXPORT_ROOT=tmpdir):
+            success, message, data = export_report_file(self.report.id, "md", "full")
+            self.assertTrue(success, message)
+
+            result = run_export_job(int(data["export_id"]))
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(
+                result["download_url"],
+                f"/api/v1/reports/exports/{data['export_id']}/download",
+            )
+            status_response = self.client.get(
+                f"/api/v1/reports/exports/{data['export_id']}/status",
+                secure=True,
+            )
+            self.assertEqual(status_response.status_code, 200)
+            status_payload = status_response.json()["data"]
+            self.assertEqual(status_payload["download_url"], result["download_url"])
+            self.assertFalse(status_payload["storage_path"].startswith("http"))
+            self.assertTrue((Path(tmpdir) / status_payload["storage_path"]).exists())
+
+            download_response = self.client.get(result["download_url"], secure=True)
+            self.assertEqual(download_response.status_code, 200)
+            self.assertIn("attachment", download_response.headers["Content-Disposition"])
+            body = b"".join(download_response.streaming_content).decode("utf-8")
+            self.assertIn("# 测试调研报告", body)

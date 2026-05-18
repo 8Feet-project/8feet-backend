@@ -363,6 +363,17 @@ S3_ADDRESS = _env('S3_ADDRESS', _YAML_CONFIG.get('S3Address', 'localhost:9000'))
 S3_BUCKET_REPORTS = _env('S3_BUCKET_REPORTS', _YAML_CONFIG.get('S3BucketReports', 'eightfeet-reports'))
 S3_SSL = _to_bool(_env('S3_USE_SSL', _YAML_CONFIG.get('S3UseSSL', False)), False)
 
+# 报告导出文件本地存储目录。Django 与 Celery 必须共享此目录。
+_REPORT_EXPORT_ROOT_VALUE = _env(
+    'REPORT_EXPORT_ROOT',
+    _YAML_CONFIG.get('ReportExportRoot', os.path.join(_PROJECT_ROOT, 'generated_reports')),
+)
+REPORT_EXPORT_ROOT = (
+    _REPORT_EXPORT_ROOT_VALUE
+    if os.path.isabs(str(_REPORT_EXPORT_ROOT_VALUE))
+    else os.path.abspath(os.path.join(_PROJECT_ROOT, str(_REPORT_EXPORT_ROOT_VALUE)))
+)
+
 # ============================================================
 # 邮件
 # ============================================================

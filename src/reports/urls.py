@@ -5,7 +5,7 @@ reports URL 配置
 from django.urls import path
 from reports.api.report_api import (
     append_followup,
-    report_detail, report_list, followup_question, export_report, export_status,
+    report_detail, report_list, followup_question, export_download, export_report, export_status,
     manual_export_report,
     public_shared_report,
     report_citation_detail,
@@ -16,6 +16,7 @@ from reports.api.report_api import (
 urlpatterns = [
     path('', report_list, name='report-list'), # GET /api/v1/reports
     path('exports/<str:export_id>/status', export_status, name='report-export-status'),
+    path('exports/<str:export_id>/download', export_download, name='report-export-download'),
     path('<int:report_id>', report_detail, name='report-detail'), # GET/PATCH
     path('<int:report_id>/citations', report_citations, name='report-citations'),
     path('<int:report_id>/citations/<int:citation_id>', report_citation_detail, name='report-citation-detail'),

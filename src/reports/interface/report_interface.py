@@ -16,7 +16,7 @@ from reports.interface.export_utils import (
     get_report_content,
     normalize_report_mode,
 )
-from reports.interface.storage_utils import upload_report_file
+from reports.interface.storage_utils import build_report_download_url, store_report_file
 from efeet.references import (
     assess_source_authority,
     authority_display_label,
@@ -358,9 +358,10 @@ def run_export_job(export_id: int) -> dict:
         else:
             raise ValueError("仅支持导出 md、pdf、docx、word、html 格式")
 
-        object_key, download_url = upload_report_file(
+        storage_path = store_report_file(
             file_path, object_name=_build_export_object_key(report, record.export_format, record.report_mode, file_path)
         )
+        download_url = build_report_download_url(record.id)
 
         if record.export_format in ('docx', 'word'):
             report.file_word_path = download_url
@@ -370,7 +371,7 @@ def run_export_job(export_id: int) -> dict:
             report.save(update_fields=['file_pdf_path'])
 
         record.status = 'COMPLETED'
-        record.storage_path = object_key
+        record.storage_path = storage_path
         record.download_url = download_url
         record.error_message = None
         record.save(update_fields=['status', 'storage_path', 'download_url', 'error_message', 'updated_at'])
