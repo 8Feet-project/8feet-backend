@@ -1,6 +1,6 @@
 """
 个性化设置模型
-FR-GRXX-0002: 收藏夹分类管理
+FR-GRXX-0002: 收藏状态管理
 FR-GRXX-0003: 动态更新提醒
 """
 from django.db import models
@@ -8,10 +8,9 @@ from django.contrib.auth import get_user_model
 
 
 class Favorite(models.Model):
-    """收藏夹
+    """收藏记录
 
-    FR-GRXX-0002: 用户可收藏调研信息、报告和常用大模型，
-    支持自定义文件夹分类管理。
+    FR-GRXX-0002: 用户可收藏调研信息、报告和常用大模型。
     """
     ITEM_TYPE_CHOICES = [
         ('INFO', '调研信息'),
@@ -29,10 +28,6 @@ class Favorite(models.Model):
     item_id = models.CharField(
         max_length=128,
         help_text="收藏对象业务 ID (如 report-001/model-001)"
-    )
-    folder = models.CharField(
-        max_length=128, null=True, blank=True,
-        help_text="自定义分类文件夹名"
     )
     created_at = models.DateTimeField(auto_now_add=True)
 

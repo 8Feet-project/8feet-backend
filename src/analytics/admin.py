@@ -27,7 +27,7 @@ from analytics.models.personalization import Favorite, Alert, UserMessage
 
 @admin.register(Favorite)
 class FavoriteAdmin(admin.ModelAdmin):
-    list_display = ['user', 'item_type', 'item_id', 'folder', 'created_at']
+    list_display = ['user', 'item_type', 'item_id', 'created_at']
     list_filter = ['item_type']
 
 

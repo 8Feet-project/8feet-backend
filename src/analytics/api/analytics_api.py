@@ -12,7 +12,7 @@ from shared.utils import (
     success_api_response, jwt_auth
 )
 from analytics.interface.analytics_interface import (
-    get_dashboard_stats, add_favorite, remove_favorite,
+    get_dashboard_stats, add_favorite,
     list_favorites, create_alert, list_alerts,
     get_cost_report
 )
@@ -41,6 +41,19 @@ def _normalize_object_type(value: str) -> str:
     return mapping.get(value or "", value or "company")
 
 
+def _backend_favorite_type(value: str) -> str:
+    mapping = {
+        "insight": "INFO",
+        "info": "INFO",
+        "report": "REPORT",
+        "model": "MODEL",
+        "INFO": "INFO",
+        "REPORT": "REPORT",
+        "MODEL": "MODEL",
+    }
+    return mapping.get(value or "", (value or "").upper())
+
+
 def _backend_object_type(value: str) -> str:
     mapping = {
         "company": "COMPANY",
@@ -52,7 +65,6 @@ def _backend_object_type(value: str) -> str:
 
 
 def _serialize_favorite(item: dict) -> dict:
-    folder = item.get("folder") or "default"
     item_type = (item.get("item_type") or "").lower()
     if item_type == "info":
         item_type = "insight"
@@ -60,7 +72,6 @@ def _serialize_favorite(item: dict) -> dict:
         "favorite_id": str(item.get("id")),
         "favorite_type": item_type,
         "target_id": str(item.get("item_id")),
-        "folder_id": folder,
         "remark": "",
     }
 
@@ -179,6 +190,8 @@ def favorite_list(request: HttpRequest):
     [route]: GET /api/v1/favorites/items
     """
     item_type = request.GET.get('favorite_type') # 对齐文档参数名
+    if item_type:
+        item_type = _backend_favorite_type(item_type)
     favorites = [_serialize_favorite(item) for item in list_favorites(request.user.id, item_type)]
     return success_api_response({
         "list": favorites,
@@ -195,12 +208,8 @@ def favorite_add(request: HttpRequest):
     """
     data = _request_data(request)
     item_type = data.get('favorite_type') # 对齐文档参数名
-    if item_type == "insight":
-        item_type = "INFO"
-    else:
-        item_type = (item_type or "").upper()
+    item_type = _backend_favorite_type(item_type)
     item_id = data.get('target_id')     # 对齐文档参数名
-    folder_id = data.get('folder_id')
 
     if not item_type or not item_id:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "缺少必要参数")
@@ -209,12 +218,12 @@ def favorite_add(request: HttpRequest):
     if not item_id:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "target_id 不能为空")
 
-    add_favorite(request.user.id, item_type, item_id, None if folder_id == "default" else folder_id)
+    created = add_favorite(request.user.id, item_type, item_id)
     favorites = list_favorites(request.user.id, item_type)
     latest = next((item for item in favorites if str(item.get("item_id")) == str(item_id)), None)
     return success_api_response({
         "favorite_id": str(latest.get("id")) if latest else "",
-        "favorite_status": "created",
+        "favorite_status": "created" if created else "favorited",
     })
 
 
@@ -231,72 +240,6 @@ def favorite_remove(request: HttpRequest, favorite_id: int):
     if favorite:
         favorite.delete()
     return success_api_response({"result": "success", "target_id": str(target_id)})
-
-
-@response_wrapper
-@jwt_auth(perms=['analytics.view_favorite'])
-def favorite_folders(request: HttpRequest):
-    from analytics.models.personalization import Favorite
-
-    if request.method == 'GET':
-        folders = [
-            {"folder_id": "default", "folder_name": "默认收藏夹"}
-        ]
-        names = (
-            Favorite.objects.filter(user_id=request.user.id)
-            .exclude(folder__isnull=True)
-            .exclude(folder="")
-            .values_list("folder", flat=True)
-            .distinct()
-        )
-        folders.extend({"folder_id": name, "folder_name": name} for name in names)
-        return success_api_response({"folders": folders, "default_folder_id": "default"})
-
-    if request.method == 'POST':
-        data = _request_data(request)
-        folder_name = (data.get("folder_name") or "").strip()
-        if not folder_name:
-            return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "folder_name 不能为空")
-        return success_api_response({"folder_id": folder_name, "folder_name": folder_name})
-
-    return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "不支持的请求方法")
-
-
-@response_wrapper
-@jwt_auth(perms=['analytics.view_favorite'])
-def favorite_folder_detail(request: HttpRequest, folder_id: str):
-    from analytics.models.personalization import Favorite
-
-    if request.method == 'PATCH':
-        data = _request_data(request)
-        folder_name = (data.get("folder_name") or "").strip()
-        if not folder_name:
-            return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "folder_name 不能为空")
-        Favorite.objects.filter(user_id=request.user.id, folder=folder_id).update(folder=folder_name)
-        return success_api_response({"folder_id": folder_name, "updated_fields": ["folder_name"]})
-
-    if request.method == 'DELETE':
-        Favorite.objects.filter(user_id=request.user.id, folder=folder_id).update(folder=None)
-        return success_api_response({"result": "success"})
-
-    return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "不支持的请求方法")
-
-
-@response_wrapper
-@require_POST
-@jwt_auth(perms=['analytics.add_favorite'])
-def favorite_move(request: HttpRequest, favorite_id: int):
-    from analytics.models.personalization import Favorite
-
-    data = _request_data(request)
-    target_folder_id = data.get("target_folder_id") or "default"
-    Favorite.objects.filter(pk=favorite_id, user_id=request.user.id).update(
-        folder=None if target_folder_id == "default" else target_folder_id
-    )
-    return success_api_response({
-        "favorite_id": str(favorite_id),
-        "target_folder_id": target_folder_id,
-    })
 
 
 @response_wrapper
