@@ -174,7 +174,7 @@ def user_activity(request: HttpRequest):
 
 
 @response_wrapper
-@jwt_auth(perms=['analytics.view_favorite'])
+@jwt_auth()
 def favorite_items(request: HttpRequest):
     if request.method == 'GET':
         return favorite_list(request)
@@ -184,7 +184,7 @@ def favorite_items(request: HttpRequest):
 
 
 @response_wrapper
-@jwt_auth(perms=['analytics.view_favorite'])
+@jwt_auth()
 def favorite_list(request: HttpRequest):
     """收藏列表
     [route]: GET /api/v1/favorites/items
@@ -201,7 +201,7 @@ def favorite_list(request: HttpRequest):
 
 @response_wrapper
 @require_POST
-@jwt_auth(perms=['analytics.add_favorite'])
+@jwt_auth()
 def favorite_add(request: HttpRequest):
     """新增收藏项
     [route]: POST /api/v1/favorites/items
@@ -228,7 +228,7 @@ def favorite_add(request: HttpRequest):
 
 
 @response_wrapper
-@jwt_auth(perms=['analytics.remove_favorite'])
+@jwt_auth()
 def favorite_remove(request: HttpRequest, favorite_id: int):
     """取消收藏
     [route]: DELETE /api/v1/favorites/items/{favorite_id}
