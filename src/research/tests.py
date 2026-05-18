@@ -45,6 +45,7 @@ from research.interface.research_runtime import (
     _record_auto_step_approval,
     build_initial_prompt,
     build_research_system_message,
+    build_research_system_message_for_user,
     _build_user_source_requirements,
     _resolve_max_turns,
 )
@@ -279,6 +280,22 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
             self.assertIn("仅适用于 Lead Agent", text)
             self.assertIn("不要在子代理 prompt 中提及该工具或审批规则", text)
         self.assertIn("当前任务关闭了自动推进", prompt)
+
+    def test_research_system_message_includes_user_persona_when_present(self):
+        user = SimpleNamespace(is_authenticated=True)
+
+        with patch("research.interface.research_runtime.get_user_persona_markdown") as get_persona:
+            get_persona.return_value = "# 用户调研人设分析\n\n偏好财务质量和风险提示。"
+            system_message = build_research_system_message_for_user(user)
+
+        self.assertIn("用户人设背景", system_message)
+        self.assertIn("偏好财务质量和风险提示", system_message)
+
+    def test_research_system_message_unchanged_without_persona(self):
+        user = SimpleNamespace(is_authenticated=True)
+
+        with patch("research.interface.research_runtime.get_user_persona_markdown", return_value=""):
+            self.assertEqual(build_research_system_message_for_user(user), build_research_system_message())
 
 
 class ResearchRealtimeReferenceTests(TestCase):

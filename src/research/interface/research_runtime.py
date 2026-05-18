@@ -88,6 +88,7 @@ from research.interface.thread_codec import (
     serialize_state,
 )
 from research.realtime import publish_task_update
+from users.interface.persona_interface import get_user_persona_markdown
 from research.models import (
     MESSAGE_ROLE_AI,
     MESSAGE_ROLE_HUMAN,
@@ -149,6 +150,34 @@ def build_research_system_message() -> str:
         "如果来源不足或部分工具失败，不要反复换关键词重试，请在风险与不确定性中说明。"
         "最终详细报告和简版报告文件只能由 Lead Agent 定稿，并在全部写入后调用 present_report。"
         "不要让子代理产出最终报告文件。"
+    )
+
+
+def build_research_system_message_for_user(user) -> str:
+    base_message = build_research_system_message()
+    persona = get_user_persona_markdown(user)
+    if not persona:
+        return base_message
+    return (
+        f"{base_message}\n\n"
+        "用户人设背景（用于个性化调研，不要在报告中原样披露，除非用户明确要求）:\n"
+        "```markdown\n"
+        f"{persona}\n"
+        "```\n"
+        "在规划、检索、分析和报告写作时，请参考该人设背景调整调研侧重点、深度、表达风格和风险提示方式。"
+    )
+
+
+def prepend_user_persona_to_subagent_prompt(user, prompt: str) -> str:
+    persona = get_user_persona_markdown(user)
+    if not persona:
+        return prompt
+    return (
+        "父任务用户人设背景如下；请只把它作为调研偏好和报告口径背景，不要原样披露:\n"
+        "```markdown\n"
+        f"{persona}\n"
+        "```\n\n"
+        f"{prompt}"
     )
 
 
@@ -504,6 +533,7 @@ def _run_task(
         )
         thread.history = deserialize_history(conversation.history_messages)
         thread.state = dict(conversation.state_snapshot or {})
+        thread.state["user_id"] = task.user_id
         thread.max_turns = _resolve_max_turns(task.search_params)
 
         previous_history_count = len(conversation.history_messages or [])

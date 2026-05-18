@@ -186,7 +186,7 @@ def create_research_task(
         task=task,
         thread_id=str(uuid4()),
         system_message=(
-            runtime.build_research_system_message()
+            runtime.build_research_system_message_for_user(user)
             if runtime else _fallback_system_message()
         ),
     )
