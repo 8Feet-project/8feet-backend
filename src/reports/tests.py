@@ -88,6 +88,8 @@ class ReportCitationDetailApiTests(TestCase):
                         "source_platform": "example.com",
                         "provider": "web_fetch",
                         "tool_name": "web_fetch",
+                        "authority_score": 4,
+                        "authority_reason": "测试用高可信来源",
                         "howpublished": "[EB/OL]",
                         "accessed_at": "2026-05-10T12:00:00",
                         "entry_type": "misc",
@@ -105,6 +107,9 @@ class ReportCitationDetailApiTests(TestCase):
         self.assertNotIn("Now let me write", payload["content_markdown"])
         self.assertEqual(payload["citations"][0]["index_number"], 1)
         self.assertEqual(payload["citations"][0]["cite_key"], "example_source")
+        self.assertEqual(payload["citations"][0]["authority_score"], 4)
+        self.assertEqual(payload["citations"][0]["authority_label"], "专业高可信来源")
+        self.assertEqual(payload["citations"][0]["authority_reason"], "测试用高可信来源")
         self.assertEqual(payload["citations"][0]["reproduction_code"], "")
         self.assertIn("@misc{example_source", payload["citations"][0]["bibtex"])
         self.assertIn("@misc{example_source", payload["references_bibtex"])
@@ -153,6 +158,7 @@ class ReportCitationDetailApiTests(TestCase):
                         "source_category": "structured_dataset",
                         "provider": "akshare",
                         "tool_name": "akshare_tool",
+                        "authority_score": 4,
                         "howpublished": "通过 AkShare 接口获取",
                         "reproduction_code": "import akshare as ak\nak.car_market_total_cpca()",
                     }
@@ -174,15 +180,18 @@ class ReportCitationDetailApiTests(TestCase):
         self.assertEqual(url_less["cite_key"], "akshare_auto_sales")
         self.assertEqual(url_less["source_platform"], "akshare")
         self.assertEqual(url_less["source_type"], "structured_dataset")
+        self.assertEqual(url_less["authority_label"], "专业高可信来源")
         self.assertIn("ak.car_market_total_cpca", url_less["reproduction_code"])
         self.assertIn("@misc{akshare_auto_sales", url_less["bibtex"])
 
         list_payload = list_response.json()["data"]
         listed = next(item for item in list_payload["list"] if item["citation_id"] == str(citation.id))
+        self.assertEqual(listed["authority_label"], "专业高可信来源")
         self.assertIn("ak.car_market_total_cpca", listed["reproduction_code"])
 
         item_payload = item_response.json()["data"]
         self.assertEqual(item_payload["source_type"], "structured_dataset")
+        self.assertEqual(item_payload["authority_label"], "专业高可信来源")
         self.assertIn("ak.car_market_total_cpca", item_payload["reproduction_code"])
 
     def test_structured_tool_citation_backfills_reproduction_code_from_tool_params(self):

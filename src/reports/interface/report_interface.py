@@ -17,6 +17,12 @@ from reports.interface.export_utils import (
     normalize_report_mode,
 )
 from reports.interface.storage_utils import upload_report_file
+from efeet.references import (
+    assess_source_authority,
+    authority_display_label,
+    authority_tier_for_score,
+    normalize_authority_score,
+)
 
 
 DSML_WRITE_FILE_CONTENT_RE = re.compile(
@@ -448,12 +454,17 @@ def _enrich_citations_from_state(report: Report, citations: list[dict[str, Any]]
         cite_key = _normalize_cite_key(state_item.get("cite_key") or used_key_by_url.get(url) or fallback_key)
         if cite_key and not state_item:
             state_item = state_citations_by_key.get(cite_key, {})
+        authority = _authority_from_state_item(state_item)
         enriched.append(
             {
                 **item,
                 "cite_key": cite_key,
                 "source_platform": state_item.get("source_platform") or "",
                 "source_type": _source_type_from_state_item(state_item),
+                "authority_score": authority["authority_score"],
+                "authority_tier": authority["authority_tier"],
+                "authority_label": authority["authority_label"],
+                "authority_reason": authority["authority_reason"],
                 "accessed_at": state_item.get("accessed_at") or "",
                 "reproduction_code": (
                     item.get("reproduction_code")
@@ -465,6 +476,29 @@ def _enrich_citations_from_state(report: Report, citations: list[dict[str, Any]]
             }
         )
     return enriched
+
+
+def _authority_from_state_item(state_item: dict[str, Any]) -> dict[str, Any]:
+    authority_score = state_item.get("authority_score")
+    authority_reason = str(state_item.get("authority_reason") or "").strip()
+    authority_tier = str(state_item.get("authority_tier") or "").strip()
+    if authority_score in (None, ""):
+        assessed = assess_source_authority(
+            url=str(state_item.get("url") or ""),
+            source_platform=str(state_item.get("source_platform") or ""),
+            provider=str(state_item.get("provider") or ""),
+            tool_name=str(state_item.get("tool_name") or ""),
+        )
+        authority_score = assessed.get("authority_score")
+        authority_tier = authority_tier or str(assessed.get("authority_tier") or "")
+        authority_reason = authority_reason or str(assessed.get("authority_reason") or "")
+    normalized_score = normalize_authority_score(authority_score)
+    return {
+        "authority_score": normalized_score,
+        "authority_tier": authority_tier or authority_tier_for_score(normalized_score),
+        "authority_label": authority_display_label(normalized_score),
+        "authority_reason": authority_reason,
+    }
 
 
 def _source_type_from_state_item(state_item: dict[str, Any]) -> str:
