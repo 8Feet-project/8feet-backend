@@ -61,6 +61,8 @@ services:
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       ALL_PROXY: ${ALL_PROXY:-}
+      DDGS_PROXY: ${DDGS_PROXY:-}
+      DDG_BACKEND: ${DDG_BACKEND:-auto}
       NO_PROXY: ${NO_PROXY:-127.0.0.1,localhost,db,redis,minio}
       STATIC_ROOT: /var/www/8feet/staticfiles
       LOG_DIR: /var/log/8feet
@@ -118,6 +120,8 @@ services:
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       ALL_PROXY: ${ALL_PROXY:-}
+      DDGS_PROXY: ${DDGS_PROXY:-}
+      DDG_BACKEND: ${DDG_BACKEND:-auto}
       NO_PROXY: ${NO_PROXY:-127.0.0.1,localhost,db,redis,minio}
       STATIC_ROOT: /var/www/8feet/staticfiles
       LOG_DIR: /var/log/8feet
