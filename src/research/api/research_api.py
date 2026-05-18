@@ -196,6 +196,8 @@ def _request_data(request: HttpRequest) -> dict:
 
 def _workflow_node_kind(event_type: str) -> str:
     normalized = (event_type or "").strip().lower()
+    if normalized == "step_approval":
+        return "human_review"
     if normalized in _REPORT_EVENT_TYPES:
         return "report_generation"
     if normalized in {"tool_call", "subagent_tool_call"}:
@@ -242,6 +244,16 @@ def _workflow_payload(detail: dict[str, Any]) -> dict[str, Any]:
         payload["output"] = detail.get("content")
     elif event_type in {"pre_tool_text", "subagent_pre_tool_text", "message", "subagent_message"}:
         payload["text"] = content_to_text(detail.get("message", ""))
+    elif event_type == "step_approval":
+        payload.update(
+            {
+                "text": content_to_text(detail.get("message", "")),
+                "next_action": str(detail.get("next_action") or ""),
+                "execution_plan": str(detail.get("execution_plan") or ""),
+                "approval_options": detail.get("approval_options", []),
+                "auto_accepted": bool(detail.get("auto_accepted")),
+            }
+        )
     if event_type == "subagent_start":
         payload["text"] = content_to_text(detail.get("description", ""))
     elif event_type == "subagent_complete":
@@ -542,6 +554,12 @@ def _workflow_node_from_log(log: dict[str, Any], index: int) -> dict[str, Any]:
     node_name = step_name
     summary = None
     description = str(log.get("detail") or "")
+    if node_kind == "human_review":
+        next_action = str(detail.get("next_action") or step_name or "确认下一步计划").strip()
+        execution_plan = str(detail.get("execution_plan") or "").strip()
+        node_name = next_action
+        summary = execution_plan or content_to_text(detail.get("message", "")) or next_action
+        description = summary
     if node_kind == "llm_message":
         node_name, summary, message_payload = _message_node_display(detail)
         payload.update(message_payload)
@@ -1235,11 +1253,13 @@ def task_steps(request: HttpRequest, task_id: int):
     edges = _workflow_edges(nodes)
     _pair_workflow_nodes(nodes)
     current_raw_node = str(raw_nodes[-1]["node_id"]) if raw_nodes else ""
+    waiting_node = next((node for node in nodes if node.get("node_status") == "waiting_user"), None)
     return success_api_response({
         "task_id": str(task_id),
         "nodes": nodes,
         "edges": edges,
         "current_node": _visible_workflow_node_id(nodes, current_raw_node) if current_raw_node else "",
+        "waiting_intervention_node_id": str(waiting_node.get("node_id")) if waiting_node else "",
     })
 
 
@@ -1367,24 +1387,54 @@ def task_intervention(request: HttpRequest, task_id: int, node_id: str):
     task = _get_user_task(task_id, request.user.id)
     if not task:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
+    step_query = TaskStepLog.objects.filter(
+        task_id=task_id,
+        is_interactive=True,
+    )
+    if str(node_id).isdigit():
+        step_query = step_query.filter(pk=int(node_id))
+    step = step_query.order_by("-id").first()
     if request.method == "GET":
+        detail = step.detail if step and isinstance(step.detail, dict) else {}
         return success_api_response({
             "task_id": str(task.id),
-            "node_id": node_id,
-            "node_name": f"节点 {node_id}",
-            "intervention_type": "manual_review",
+            "node_id": str(step.id) if step else node_id,
+            "node_name": str(detail.get("next_action") or (step.step_name if step else f"节点 {node_id}")),
+            "intervention_type": "step_approval",
             "status": "waiting_user" if task.status == "WAITING_USER" else "resolved",
-            "reason": "",
-            "suggested_action": "confirm_continue",
-            "current_params": {},
-            "preview_data": {},
+            "reason": str(detail.get("execution_plan") or ""),
+            "suggested_action": "accept",
+            "current_params": {
+                "next_action": str(detail.get("next_action") or ""),
+                "execution_plan": str(detail.get("execution_plan") or ""),
+            },
+            "preview_data": {
+                "approval_options": detail.get("approval_options", ["accept", "replan", "reject"]),
+                "auto_accepted": bool(detail.get("auto_accepted")),
+            },
         })
 
     data = _request_data(request)
+    if not step:
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "未找到待处理介入步骤")
+    response_data = {
+        "comment": data.get("comment") or data.get("reason") or "",
+        "reason": data.get("reason") or data.get("comment") or "",
+    }
+    success, message = respond_to_step(
+        task_id=task_id,
+        user_id=request.user.id,
+        step_id=step.id,
+        action=data.get("action", "accept"),
+        response_data=response_data,
+    )
+    if not success:
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message or "提交介入反馈失败")
+    task.refresh_from_db()
     return success_api_response({
         "task_id": str(task.id),
-        "node_id": node_id,
-        "result": data.get("action", "confirm_continue"),
+        "node_id": str(step.id),
+        "result": data.get("action", "accept"),
         "audit_log_id": "",
         "task_status": _frontend_status(task.status),
         "node_status": "completed",

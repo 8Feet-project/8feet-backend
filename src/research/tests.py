@@ -40,12 +40,13 @@ from research.interface.prompt_contracts import (
 from research.interface.research_runtime import (
     _build_execution_constraints,
     _record_event,
+    _record_auto_step_approval,
     build_initial_prompt,
     build_research_system_message,
     _resolve_max_turns,
 )
 from research.models import ResearchConversation, ResearchTask, ScrapedContent, TaskStepLog
-from research.interface.research_interface import infer_object_type
+from research.interface.research_interface import infer_object_type, respond_to_step
 from research.api.research_api import (
     _agent_step_status,
     _attach_subagent_workflows,
@@ -222,6 +223,23 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
             self.assertIn("[@cite_key]", text)
             self.assertIn("不要编造 citation key", text)
 
+    def test_step_approval_prompt_is_lead_only(self):
+        system_message = build_research_system_message()
+        task = SimpleNamespace(
+            title="审批调研",
+            object_name="Acme",
+            object_type="COMPANY",
+            search_params={"auto_advance": False},
+        )
+        prompt = build_initial_prompt(task)
+
+        for text in (system_message, prompt):
+            self.assertIn("request_step_approval", text)
+            self.assertIn("参数有且只有两个字符串", text)
+            self.assertIn("仅适用于 Lead Agent", text)
+            self.assertIn("不要在子代理 prompt 中提及该工具或审批规则", text)
+        self.assertIn("当前任务关闭了自动推进", prompt)
+
 
 class ResearchRealtimeReferenceTests(TestCase):
     def test_tool_result_event_persists_references_for_live_facts(self):
@@ -278,6 +296,38 @@ class ResearchRealtimeReferenceTests(TestCase):
         )
         log = task.step_logs.get(step_name="工具返回: web_fetch")
         self.assertEqual(log.detail["citations"][0]["cite_key"], "WEB_FETCH_CAIXINGLOBAL_COM_ABC")
+
+    def test_auto_step_approval_records_completed_interactive_log(self):
+        user = get_user_model().objects.create_user(username="research-auto-approval-user")
+        task = ResearchTask.objects.create(
+            user=user,
+            title="自动推进审批",
+            object_name="Example",
+            object_type="COMPANY",
+            status="SEARCHING",
+        )
+
+        with patch.object(research_runtime, "publish_task_update") as publish_update:
+            _record_auto_step_approval(
+                task.id,
+                1,
+                {
+                    "type": "tool_call",
+                    "name": "request_step_approval",
+                    "id": "call_approval",
+                    "args": {
+                        "next_action": "拆解调研维度",
+                        "execution_plan": "先覆盖核心业务，再安排证据检索。",
+                    },
+                },
+            )
+
+        log = task.step_logs.get(step_name="拆解调研维度")
+        self.assertEqual(log.step_status, "COMPLETED")
+        self.assertTrue(log.is_interactive)
+        self.assertTrue(log.detail["auto_accepted"])
+        self.assertEqual(log.user_response["data"]["response"], "接受")
+        self.assertTrue(any(call.args[1] == "step_log_created" for call in publish_update.call_args_list))
 
     def test_subagent_tool_result_content_guidance_persists_references_for_live_facts(self):
         user = get_user_model().objects.create_user(username="research-subagent-reference-user")
@@ -468,6 +518,51 @@ class ResearchRealtimeReferenceTests(TestCase):
         self.assertIn("@misc{akshare_key", detail["references_bibtex"])
         self.assertIn("@misc{web_key", detail["references_bibtex"])
 
+    def test_respond_to_step_requeues_approval_response(self):
+        user = get_user_model().objects.create_user(username="research-approval-response-user")
+        task = ResearchTask.objects.create(
+            user=user,
+            title="审批恢复",
+            object_name="Example",
+            object_type="COMPANY",
+            status="WAITING_USER",
+        )
+        ResearchConversation.objects.create(task=task, thread_id="thread-approval-response")
+        step = TaskStepLog.objects.create(
+            task=task,
+            step_name="拆解调研维度",
+            step_status="PAUSED",
+            is_interactive=True,
+            detail={
+                "event_type": "step_approval",
+                "next_action": "拆解调研维度",
+                "execution_plan": "先覆盖核心业务，再安排证据检索。",
+            },
+        )
+
+        runtime = SimpleNamespace(
+            _approval_response_prompt=lambda text: f"approval:{text}",
+            enqueue_task_run=lambda *args, **kwargs: (True, None),
+        )
+        with patch("research.interface.research_interface._safe_research_runtime", return_value=(runtime, None)):
+            with patch.object(runtime, "enqueue_task_run", return_value=(True, None)) as enqueue:
+                success, message = respond_to_step(
+                    task.id,
+                    user.id,
+                    step.id,
+                    "reject",
+                    {"comment": "证据不足"},
+                )
+
+        self.assertTrue(success)
+        self.assertIsNone(message)
+        step.refresh_from_db()
+        self.assertEqual(step.step_status, "COMPLETED")
+        self.assertEqual(step.user_response["data"]["response"], "拒绝，因为证据不足")
+        enqueue.assert_called_once()
+        self.assertEqual(enqueue.call_args.kwargs["prompt"], "approval:拒绝，因为证据不足")
+        self.assertEqual(enqueue.call_args.kwargs["queued_step_name"], "继续执行审批后的调研")
+
 
 class CrossValidationRuntimeTests(SimpleTestCase):
     def test_model_id_list_accepts_json_array_and_comma_text(self):
@@ -614,6 +709,32 @@ class ResearchProgressModelTests(SimpleTestCase):
         )
 
         self.assertEqual(status, "completed")
+
+    def test_step_approval_log_becomes_waiting_human_review_node(self):
+        node = _workflow_node_from_log(
+            {
+                "id": 13,
+                "step_name": "拆解调研维度",
+                "step_status": "PAUSED",
+                "is_interactive": True,
+                "detail": {
+                    "event_type": "step_approval",
+                    "next_action": "拆解调研维度",
+                    "execution_plan": "先覆盖核心业务，再安排证据检索。",
+                    "message": "拆解调研维度\n先覆盖核心业务，再安排证据检索。",
+                    "approval_options": ["accept", "replan", "reject"],
+                },
+            },
+            0,
+        )
+
+        self.assertEqual(node["node_kind"], "human_review")
+        self.assertEqual(node["node_status"], "waiting_user")
+        self.assertTrue(node["can_intervene"])
+        self.assertEqual(node["node_name"], "拆解调研维度")
+        self.assertEqual(node["summary"], "先覆盖核心业务，再安排证据检索。")
+        self.assertEqual(node["payload"]["next_action"], "拆解调研维度")
+        self.assertEqual(node["payload"]["approval_options"], ["accept", "replan", "reject"])
 
     def test_dsml_report_message_becomes_light_agent_step(self):
         message = (

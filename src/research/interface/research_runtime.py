@@ -16,6 +16,7 @@ from typing import Any
 from django.db import close_old_connections, transaction
 from django.utils import timezone
 from dotenv import load_dotenv
+from langchain_core.messages import ToolMessage
 
 try:
     from efeet import (
@@ -99,6 +100,7 @@ from research.models import (
     SESSION_STATUS_CANCELLED,
     SESSION_STATUS_COMPLETED,
     SESSION_STATUS_FAILED,
+    SESSION_STATUS_IDLE,
     SESSION_STATUS_RUNNING,
     STATUS_ANALYZING,
     STATUS_CANCELLED,
@@ -106,11 +108,14 @@ from research.models import (
     STATUS_FAILED,
     STATUS_PENDING,
     STATUS_SEARCHING,
+    STATUS_WAITING_USER,
     TaskStepLog,
 )
 
 DEFAULT_MAX_TURNS = 100
 MAX_WORKERS = 4
+STEP_APPROVAL_TOOL_NAMES = {"request_step_approval", "ask_clarification"}
+STEP_APPROVAL_ACCEPTED = "接受"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / '.env')
 _EXECUTOR = ThreadPoolExecutor(
@@ -136,6 +141,7 @@ def build_research_system_message() -> str:
         "你是 8Feet 商业对象智能调研分析助手。"
         "你的目标是围绕公司、股票、商品三类对象开展深入、可追溯的商业调研。"
         "先拆解调研维度，将并行检索和验证工作通过 task 工具分配给 deep-search 或 researcher 子代理，最后汇总结果产出报告。"
+        f"\n{step_approval_requirements()}"
         f"\n{workflow_contract}"
         f"\n{report_contract}"
         f"{citation_contract}"
@@ -144,6 +150,25 @@ def build_research_system_message() -> str:
         "最终详细报告和简版报告文件只能由 Lead Agent 定稿，并在全部写入后调用 present_report。"
         "不要让子代理产出最终报告文件。"
     )
+
+
+def step_approval_requirements(auto_advance: bool | None = None) -> str:
+    """Instructions for user approval checkpoints before core decisions."""
+    lines = [
+        "\n关键步骤审批约束:",
+        "- 在做关键决策或进入每个核心步骤前，必须先调用 request_step_approval 工具，等待用户返回后再继续。",
+        "- 核心步骤至少包括: 调研维度拆解、子代理分工、关键证据口径取舍、最终报告结构/结论定稿。",
+        "- request_step_approval 的参数有且只有两个字符串: next_action 用一句短语概括接下来做什么，execution_plan 说明这一步计划如何执行。",
+        "- 不要在工具参数里传选项；前端固定展示“接受 / 重新计划 / 拒绝，因为_______”。",
+        "- 用户返回“接受”时按原计划执行；返回“重新计划”时先调整方案并再次请求审批；返回“拒绝，因为...”时根据理由修正计划。",
+        "- request_step_approval 必须单独调用，不要和其他工具调用混在同一轮。",
+        "- 该审批工具和本段审批规则仅适用于 Lead Agent；通过 task 委托子代理时，不要在子代理 prompt 中提及该工具或审批规则。",
+    ]
+    if auto_advance is True:
+        lines.append("- 当前任务开启了自动推进；系统会自动接受这些审批请求。")
+    elif auto_advance is False:
+        lines.append("- 当前任务关闭了自动推进；必须等待用户人工选择后继续。")
+    return "\n".join(lines) + "\n"
 
 
 def _subagents_disabled(params: dict[str, Any]) -> bool:
@@ -199,6 +224,7 @@ def build_initial_prompt(task: ResearchTask) -> str:
         "  4. 严格遵守下方最终报告格式与交付要求。\n"
         "  5. 不要为了追求完整性无限检索；证据不足时说明不确定性并完成报告。\n\n"
         f"{workflow_contract}\n"
+        f"{step_approval_requirements(_auto_advance_enabled(task.search_params))}\n"
         f"{citation_contract}\n"
         f"{report_contract}\n"
         f"{_build_execution_constraints(task.search_params)}\n"
@@ -212,6 +238,22 @@ def build_followup_prompt(message: str) -> str:
         "请基于当前已经积累的调研上下文继续回答下面的问题。"
         "如有必要，可以继续调用工具补充验证，再给出答案。\n\n"
         f"用户追问:\n{message.strip()}"
+    )
+
+
+def _auto_advance_enabled(search_params: dict[str, Any] | None) -> bool:
+    params = search_params or {}
+    value = params.get("auto_advance")
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _approval_response_prompt(response_text: str) -> str:
+    return (
+        "用户已对上一条关键步骤审批请求作出选择，请把这条选择视为 "
+        "request_step_approval 工具返回值，并继续执行。\n\n"
+        f"审批返回值:\n{response_text.strip() or STEP_APPROVAL_ACCEPTED}"
     )
 
 
@@ -363,12 +405,44 @@ def _run_task(
         )
         previous_report_row_count = Report.objects.filter(task=task).count()
         output_chunks: list[str] = []
+        current_prompt = prompt
+        auto_approval_count = 0
+        while True:
+            output_chunks = []
+            pending_approval_event: dict[str, Any] | None = None
 
-        def on_event(event: dict[str, Any]) -> None:
-            _record_event(task_id, run_number, event)
+            def on_event(event: dict[str, Any]) -> None:
+                nonlocal pending_approval_event
+                if _is_step_approval_event(event):
+                    pending_approval_event = dict(event)
+                    return
+                _record_event(task_id, run_number, event)
 
-        for chunk in thread.stream(prompt, on_event=on_event):
-            output_chunks.append(chunk)
+            for chunk in thread.stream(current_prompt, on_event=on_event):
+                output_chunks.append(chunk)
+
+            if pending_approval_event is None:
+                break
+
+            if _auto_advance_enabled(task.search_params):
+                auto_approval_count += 1
+                if auto_approval_count > 20:
+                    raise RuntimeError("自动推进审批次数过多，已停止以避免循环")
+                _remove_step_approval_tool_message(thread)
+                _append_auto_approval_tool_message(thread, pending_approval_event, STEP_APPROVAL_ACCEPTED)
+                _record_auto_step_approval(task_id, run_number, pending_approval_event)
+                current_prompt = _approval_response_prompt(STEP_APPROVAL_ACCEPTED)
+                continue
+
+            _persist_pending_step_approval(
+                task=task,
+                conversation=conversation,
+                thread=thread,
+                prompt=current_prompt,
+                event=pending_approval_event,
+                run_number=run_number,
+            )
+            return
 
         final_output = "".join(output_chunks).strip()
         if not final_output:
@@ -498,6 +572,152 @@ def _resolve_sandbox_paths(search_params: dict[str, Any] | None) -> SandboxPaths
     return SandboxPaths(base_dir)
 
 
+def _is_step_approval_event(event: dict[str, Any]) -> bool:
+    return (
+        str(event.get("type", "") or "") == "tool_call"
+        and str(event.get("name", "") or "") in STEP_APPROVAL_TOOL_NAMES
+    )
+
+
+def _step_approval_args(event: dict[str, Any]) -> dict[str, str]:
+    args = event.get("args") if isinstance(event.get("args"), dict) else {}
+    next_action = str(args.get("next_action") or args.get("question") or "").strip()
+    execution_plan = str(args.get("execution_plan") or args.get("context") or "").strip()
+    return {
+        "next_action": next_action or "确认下一步计划",
+        "execution_plan": execution_plan,
+    }
+
+
+def _step_approval_content(args: dict[str, str]) -> str:
+    lines = [args.get("next_action") or "确认下一步计划"]
+    execution_plan = str(args.get("execution_plan") or "").strip()
+    if execution_plan:
+        lines.append(execution_plan)
+    return "\n".join(lines)
+
+
+def _approval_detail_from_event(
+    event: dict[str, Any],
+    run_number: int,
+    *,
+    auto_accepted: bool = False,
+) -> dict[str, Any]:
+    args = _step_approval_args(event)
+    return {
+        "event_type": "step_approval",
+        "tool_name": str(event.get("name") or "request_step_approval"),
+        "id": str(event.get("id", "") or ""),
+        "args": args,
+        "next_action": args["next_action"],
+        "execution_plan": args["execution_plan"],
+        "message": _step_approval_content(args),
+        "run_number": run_number,
+        "approval_options": ["accept", "replan", "reject"],
+        "auto_accepted": auto_accepted,
+        **_event_detail_extra(event),
+    }
+
+
+def _append_auto_approval_tool_message(
+    thread,
+    event: dict[str, Any],
+    response_text: str = STEP_APPROVAL_ACCEPTED,
+) -> None:
+    tool_call_id = str(event.get("id") or "")
+    if not tool_call_id:
+        return
+    thread.history.append(
+        ToolMessage(
+            content=response_text,
+            tool_call_id=tool_call_id,
+            name=str(event.get("name") or "request_step_approval"),
+        )
+    )
+    state_messages = thread.state.get("messages") if isinstance(thread.state, dict) else None
+    if isinstance(state_messages, list):
+        state_messages.append(thread.history[-1])
+    elif isinstance(thread.state, dict):
+        thread.state["messages"] = [*thread.history]
+
+
+def _remove_step_approval_tool_message(thread) -> None:
+    if not getattr(thread, "history", None):
+        return
+    latest = thread.history[-1]
+    if isinstance(latest, ToolMessage) and latest.name in STEP_APPROVAL_TOOL_NAMES:
+        thread.history = list(thread.history[:-1])
+    if isinstance(getattr(thread, "state", None), dict):
+        state_messages = thread.state.get("messages")
+        if isinstance(state_messages, list) and state_messages:
+            latest_state_message = state_messages[-1]
+            if isinstance(latest_state_message, ToolMessage) and latest_state_message.name in STEP_APPROVAL_TOOL_NAMES:
+                thread.state["messages"] = list(state_messages[:-1])
+
+
+def _persist_pending_step_approval(
+    task: ResearchTask,
+    conversation: ResearchConversation,
+    thread,
+    prompt: str,
+    event: dict[str, Any],
+    run_number: int,
+) -> None:
+    _remove_step_approval_tool_message(thread)
+    serialized_history = serialize_history(thread.history)
+    state_snapshot = serialize_state(thread.state)
+    detail = _approval_detail_from_event(event, run_number)
+
+    with transaction.atomic():
+        conversation.history_messages = serialized_history
+        conversation.state_snapshot = state_snapshot
+        conversation.latest_user_message = prompt.strip()
+        conversation.latest_assistant_message = _step_approval_content(detail)
+        conversation.last_error = ""
+        conversation.status = SESSION_STATUS_IDLE
+        conversation.last_finished_at = timezone.now()
+        conversation.save(
+            update_fields=[
+                "history_messages",
+                "state_snapshot",
+                "latest_user_message",
+                "latest_assistant_message",
+                "last_error",
+                "status",
+                "last_finished_at",
+                "updated_at",
+            ]
+        )
+
+        task.status = STATUS_WAITING_USER
+        task.progress = _merge_progress(
+            task.progress,
+            {
+                "stage": STATUS_WAITING_USER,
+                "last_event_type": "step_approval",
+            },
+        )
+        task.save(update_fields=["status", "progress", "updated_at"])
+
+        TaskStepLog.objects.create(
+            task=task,
+            step_name=detail["next_action"],
+            step_status="PAUSED",
+            detail=detail,
+            is_interactive=True,
+        )
+
+    publish_task_update(
+        task.id,
+        "task_progress_changed",
+        {
+            "status": STATUS_WAITING_USER,
+            "progress": task.progress,
+            "reference_count": 0,
+        },
+    )
+
+
 def _record_event(task_id: int, run_number: int, event: dict[str, Any]) -> None:
     task = ResearchTask.objects.filter(pk=task_id).first()
     if task is None:
@@ -540,6 +760,33 @@ def _record_event(task_id: int, run_number: int, event: dict[str, Any]) -> None:
                 "reference_count": reference_count,
             },
         )
+
+
+def _record_auto_step_approval(task_id: int, run_number: int, event: dict[str, Any]) -> None:
+    task = ResearchTask.objects.filter(pk=task_id).first()
+    if task is None:
+        raise TaskCancelledError("任务已不存在")
+    detail = _approval_detail_from_event(event, run_number, auto_accepted=True)
+    TaskStepLog.objects.create(
+        task=task,
+        step_name=detail["next_action"],
+        step_status="COMPLETED",
+        detail=detail,
+        is_interactive=True,
+        user_response={
+            "action": "accept",
+            "data": {"response": STEP_APPROVAL_ACCEPTED, "auto_advance": True},
+        },
+    )
+    publish_task_update(
+        task.id,
+        "step_log_created",
+        {
+            "step_name": detail["next_action"],
+            "step_status": "COMPLETED",
+            "auto_accepted": True,
+        },
+    )
 
 
 def _mark_matching_tool_call_completed(task_id: int, run_number: int, event: dict[str, Any]) -> None:
@@ -735,6 +982,13 @@ def _event_to_step(
     actor = str(event.get("subagent_id") or "").strip()
     prefix = f"[{actor}] " if actor else ""
 
+    if event_type == "step_approval":
+        detail = _approval_detail_from_event(event, run_number)
+        return (
+            f"{prefix}{detail['next_action']}",
+            "PAUSED",
+            detail,
+        )
     if event_type in {"pre_tool_text", "subagent_pre_tool_text"}:
         return (
             f"{prefix}规划下一步",
@@ -874,6 +1128,10 @@ def _progress_from_event(
         merged["last_tool"] = str(event.get("name"))
 
     event_type = merged["last_event_type"]
+    if event_type == "step_approval":
+        merged["stage"] = STATUS_WAITING_USER
+        merged["analyzing"] = min(95, max(merged["analyzing"], 85))
+        return (STATUS_WAITING_USER, merged)
     if event_type in {
         "tool_call",
         "tool_result",

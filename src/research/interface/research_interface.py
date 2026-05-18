@@ -25,6 +25,7 @@ from research.models import (
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_PENDING,
+    STATUS_WAITING_USER,
 )
 from research.models.task_step_log import TaskStepLog
 
@@ -407,11 +408,14 @@ def respond_to_step(
     response_data: dict = None,
 ) -> Tuple[bool, Optional[str]]:
     """用户提供反馈，继续或终止任务。"""
-    task = ResearchTask.objects.filter(pk=task_id, user_id=user_id).first()
+    task = (
+        ResearchTask.objects
+        .select_related('conversation')
+        .filter(pk=task_id, user_id=user_id)
+        .first()
+    )
     if not task:
         return (False, "任务不存在或无权操作")
-
-    from research.models.research_task import STATUS_SEARCHING, STATUS_WAITING_USER
 
     if task.status != STATUS_WAITING_USER:
         return (False, "当前任务未处于等待介入状态")
@@ -424,9 +428,10 @@ def respond_to_step(
     if not step:
         return (False, "无效的介入步骤")
 
+    action_text = _step_response_text(action, response_data or {})
     step.user_response = {
         "action": action,
-        "data": response_data or {},
+        "data": {**(response_data or {}), "response": action_text},
     }
     step.step_status = 'COMPLETED'
     step.save(update_fields=['user_response', 'step_status'])
@@ -441,17 +446,47 @@ def respond_to_step(
             detail={"message": "用户在介入时选择中止任务"},
         )
     else:
-        task.status = STATUS_SEARCHING
-        task.save(update_fields=['status', 'updated_at'])
         TaskStepLog.objects.create(
             task=task,
             step_name="恢复运行",
             step_status="RUNNING",
-            detail={"message": "接收到用户反馈，任务继续执行", "action": action},
+            detail={"message": action_text, "action": action},
         )
-        # TODO: 真正唤醒运行中的 research runtime / Celery 任务继续往下走
+
+        runtime, runtime_error = _safe_research_runtime()
+        if runtime is None:
+            return (False, runtime_error or "调研运行时不可用")
+
+        success, error_message = runtime.enqueue_task_run(
+            task.id,
+            prompt=runtime._approval_response_prompt(action_text),
+            create_report=True,
+            queued_step_name="继续执行审批后的调研",
+            run_metadata={
+                "approval_step_id": step.id,
+                "approval_action": action,
+            },
+        )
+        if not success:
+            task.status = STATUS_WAITING_USER
+            task.save(update_fields=['status', 'updated_at'])
+            return (False, error_message or "恢复调研失败")
 
     return (True, None)
+
+
+def _step_response_text(action: str, response_data: dict) -> str:
+    normalized = str(action or "").strip().lower()
+    if normalized in {"accept", "confirm_continue", "accepted"}:
+        return "接受"
+    if normalized in {"replan", "update_rules", "replan_requested"}:
+        comment = str(response_data.get("comment") or response_data.get("reason") or "").strip()
+        return f"重新计划: {comment}" if comment else "重新计划"
+    if normalized in {"reject", "skip_intervention", "rejected"}:
+        reason = str(response_data.get("comment") or response_data.get("reason") or "").strip()
+        return f"拒绝，因为{reason}" if reason else "拒绝"
+    comment = str(response_data.get("comment") or response_data.get("reason") or "").strip()
+    return comment or str(action or "").strip() or "接受"
 
 
 def get_task_conversation_history(task_id: int, user_id: int) -> Optional[dict]:
