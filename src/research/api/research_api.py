@@ -200,6 +200,19 @@ def _coerce_bool(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _latest_pending_step_approval(task_id: int) -> TaskStepLog | None:
+    steps = TaskStepLog.objects.filter(
+        task_id=task_id,
+        is_interactive=True,
+        step_status="PAUSED",
+    ).order_by("-id")
+    for step in steps:
+        detail = step.detail if isinstance(step.detail, dict) else {}
+        if str(detail.get("event_type", "") or "").strip().lower() == "step_approval":
+            return step
+    return None
+
+
 def _workflow_node_kind(event_type: str) -> str:
     normalized = (event_type or "").strip().lower()
     if normalized == "step_approval":
@@ -1156,9 +1169,33 @@ def task_auto_advance(request: HttpRequest, task_id: int):
     auto_advance = _coerce_bool(data.get("auto_advance"))
     task.search_params = {**(task.search_params or {}), "auto_advance": auto_advance}
     task.save(update_fields=["search_params", "updated_at"])
+    resumed = False
+    if auto_advance:
+        step = _latest_pending_step_approval(task.id)
+        if step:
+            success, message = respond_to_step(
+                task_id=task.id,
+                user_id=request.user.id,
+                step_id=step.id,
+                action="accept",
+                response_data={"comment": "", "reason": "", "auto_advance": True},
+            )
+            if not success:
+                return failed_api_response(
+                    ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR,
+                    message or "自动推进当前待审批步骤失败",
+                )
+            step.refresh_from_db()
+            detail = step.detail if isinstance(step.detail, dict) else {}
+            step.detail = {**detail, "auto_accepted": True}
+            step.save(update_fields=["detail"])
+            task.refresh_from_db()
+            resumed = True
     return success_api_response({
         "task_id": str(task.id),
         "auto_advance": auto_advance,
+        "task_status": _frontend_status(task.status),
+        "resumed": resumed,
     })
 
 

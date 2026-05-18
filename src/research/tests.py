@@ -4,8 +4,10 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import jwt
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.test import SimpleTestCase, TestCase
+from django.test import Client, SimpleTestCase, TestCase
 from django.utils import timezone
 
 from reports.interface.report_interface import get_report_detail
@@ -64,7 +66,6 @@ from research.api.research_api import (
     _tool_display,
     _workflow_node_from_log,
 )
-
 
 class ResearchRuntimeConstraintTests(SimpleTestCase):
     def test_infer_object_type_keeps_explicit_selection(self):
@@ -563,6 +564,61 @@ class ResearchRealtimeReferenceTests(TestCase):
         enqueue.assert_called_once()
         self.assertEqual(enqueue.call_args.kwargs["prompt"], "approval:拒绝，因为证据不足")
         self.assertEqual(enqueue.call_args.kwargs["queued_step_name"], "继续执行审批后的调研")
+
+    def test_auto_advance_toggle_accepts_pending_step_approval(self):
+        user = get_user_model().objects.create_user(
+            username="research-auto-advance-api-user",
+            is_superuser=True,
+        )
+        task = ResearchTask.objects.create(
+            user=user,
+            title="自动推进",
+            object_name="Example",
+            object_type="COMPANY",
+            status="WAITING_USER",
+            search_params={"auto_advance": False},
+        )
+        ResearchConversation.objects.create(task=task, thread_id="thread-auto-advance-api")
+        step = TaskStepLog.objects.create(
+            task=task,
+            step_name="拆解调研维度",
+            step_status="PAUSED",
+            is_interactive=True,
+            detail={
+                "event_type": "step_approval",
+                "next_action": "拆解调研维度",
+                "execution_plan": "先覆盖核心业务，再安排证据检索。",
+            },
+        )
+        token = jwt.encode(
+            {"user_id": user.id, "type": "access_token"},
+            settings.SECRET_KEY,
+            algorithm="HS256",
+        )
+        client = Client(HTTP_AUTHORIZATION=f"Bearer {token}")
+        runtime = SimpleNamespace(
+            _approval_response_prompt=lambda text: f"approval:{text}",
+            enqueue_task_run=lambda *args, **kwargs: (True, None),
+        )
+
+        with patch("research.interface.research_interface._safe_research_runtime", return_value=(runtime, None)):
+            with patch.object(runtime, "enqueue_task_run", return_value=(True, None)) as enqueue:
+                response = client.post(
+                    f"/api/v1/research/tasks/{task.id}/auto-advance",
+                    data=json.dumps({"auto_advance": True}),
+                    content_type="application/json",
+                )
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["code"], 0)
+        self.assertTrue(payload["data"]["auto_advance"])
+        self.assertTrue(payload["data"]["resumed"])
+        step.refresh_from_db()
+        self.assertEqual(step.step_status, "COMPLETED")
+        self.assertTrue(step.detail["auto_accepted"])
+        self.assertEqual(step.user_response["data"]["response"], "接受")
+        enqueue.assert_called_once()
 
 
 class CrossValidationRuntimeTests(SimpleTestCase):
