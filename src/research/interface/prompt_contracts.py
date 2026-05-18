@@ -83,6 +83,7 @@ def search_then_research_workflow() -> str:
     return (
         "DeepSearch 工作流建议:\n"
         "- 先拆解调研维度，通过 task 工具分配给 deep-search 子代理并行检索和发现证据。\n"
+        "- 你可以在同一轮回复中一次性发出多个 task 工具调用，以便多个子代理并行工作。\n"
         "- deep-search 使用 web_search 或结构化业务数据工具识别信息面、候选来源、关键维度和明显争议点；"
         "web_search 结果已按 canonical URL 去重并附带 source_category/authority_score，authority_score 为 1-5 档，"
         "选源时优先官方披露、监管机构、交易所等 5 档来源，其次 4 档结构化数据、公司官网和权威财经媒体。\n"

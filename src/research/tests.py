@@ -203,6 +203,7 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
 
         self.assertIn("先拆解调研维度", contract)
         self.assertIn("deep-search 子代理并行检索", contract)
+        self.assertIn("同一轮回复中一次性发出多个 task 工具调用", contract)
         self.assertIn("canonical URL 去重", contract)
         self.assertIn("authority_score", contract)
         self.assertIn("优先官方披露、监管机构、交易所", contract)
