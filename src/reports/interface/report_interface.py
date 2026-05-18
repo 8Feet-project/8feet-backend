@@ -239,6 +239,45 @@ def create_followup(
     return (True, None, followup.id)
 
 
+def append_report_followup(
+    report_id: int,
+    followup_id: int,
+    user_id: int,
+    append_text: str,
+) -> Tuple[bool, Optional[str], Optional[int]]:
+    """追加报告追问，并继续原调研任务会话。"""
+    if not append_text or not append_text.strip():
+        return (False, "append_text 不能为空", None)
+
+    followup = (
+        ReportFollowup.objects
+        .select_related('report')
+        .filter(pk=followup_id, report_id=report_id, user_id=user_id)
+        .first()
+    )
+    if not followup:
+        return (False, "追问不存在", None)
+
+    from research.interface.research_interface import continue_task_conversation
+
+    appended_question = append_text.strip()
+    followup.question = f"{followup.question}\n\n{appended_question}"
+    followup.answer = None
+    followup.save(update_fields=['question', 'answer'])
+
+    success, message = continue_task_conversation(
+        followup.report.task_id,
+        user_id,
+        appended_question,
+        run_metadata={"report_followup_id": followup.id},
+    )
+    if not success:
+        followup.answer = f"追问任务启动失败: {message}"
+        followup.save(update_fields=['answer'])
+        return (False, message, None)
+    return (True, None, followup.id)
+
+
 def export_report_file(report_id: int, export_format: str, report_mode: str = 'full') -> Tuple[bool, str, Optional[dict]]:
     """创建导出任务"""
     report = Report.objects.filter(pk=report_id).prefetch_related('citations').first()

@@ -17,7 +17,8 @@ from shared.utils import (
 from reports.interface.report_interface import (
     get_report_detail, list_reports_by_task,
     list_user_reports, create_followup, list_report_versions,
-    export_report_file, get_export_record, trigger_manual_export
+    export_report_file, get_export_record, trigger_manual_export,
+    append_report_followup,
 )
 from reports.models.citation import Citation, ReportFollowup
 from reports.tasks import export_report_task
@@ -270,17 +271,21 @@ def public_shared_report(request: HttpRequest, share_id: str):
 @require_POST
 @jwt_auth(perms=['reports.followup_report'])
 def append_followup(request: HttpRequest, report_id: int, qa_id: int):
-    followup = ReportFollowup.objects.filter(pk=qa_id, report_id=report_id, user=request.user).first()
-    if not followup:
-        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "追问不存在")
     try:
         payload = json.loads(request.body) if request.body else {}
     except Exception:
         payload = request.POST
     append_text = payload.get("append_text") or ""
-    if append_text:
-        followup.question = f"{followup.question}\n\n{append_text}"
-        followup.save(update_fields=["question"])
+    success, message, followup_id = append_report_followup(
+        report_id,
+        qa_id,
+        request.user.id,
+        append_text,
+    )
+    if not success:
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message or "追加追问失败")
+
+    followup = ReportFollowup.objects.get(pk=followup_id)
     return success_api_response({
         "report_id": str(report_id),
         "qa": _serialize_followup(followup),

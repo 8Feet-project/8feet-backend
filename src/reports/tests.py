@@ -4,8 +4,9 @@ from django.conf import settings
 from django.contrib.auth.models import Permission
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
+from unittest.mock import Mock, patch
 
-from reports.models.citation import Citation
+from reports.models.citation import Citation, ReportFollowup
 from reports.models.report import Report
 from research.models.conversation import ResearchConversation
 from research.models.research_task import ResearchTask
@@ -23,6 +24,11 @@ class ReportCitationDetailApiTests(TestCase):
             codename="view_report",
         )
         self.user.user_permissions.add(permission)
+        followup_permission = Permission.objects.get(
+            content_type__app_label="reports",
+            codename="followup_report",
+        )
+        self.user.user_permissions.add(followup_permission)
 
         self.task = ResearchTask.objects.create(
             user=self.user,
@@ -225,3 +231,40 @@ class ReportCitationDetailApiTests(TestCase):
         self.assertIn("www.csrc.gov.cn/searchList", payload["reproduction_code"])
         self.assertIn("keyword = '宁德时代'", payload["reproduction_code"])
         self.assertNotIn("efeet.tools", payload["reproduction_code"])
+
+    def test_append_followup_restarts_task_conversation(self):
+        ResearchConversation.objects.create(
+            task=self.task,
+            thread_id="thread-report-followup",
+            system_message="system",
+        )
+        followup = ReportFollowup.objects.create(
+            report=self.report,
+            user=self.user,
+            question="原始追问",
+            answer="旧答案",
+        )
+        runtime = Mock()
+        runtime.build_followup_prompt.side_effect = lambda message: f"followup:{message}"
+        runtime.enqueue_task_run.return_value = (True, None)
+
+        with patch("research.interface.research_interface._safe_research_runtime", return_value=(runtime, None)):
+            response = self.client.post(
+                f"/api/v1/reports/{self.report.id}/qa/{followup.id}/append",
+                data='{"append_text":"请补充风险因素"}',
+                content_type="application/json",
+                secure=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["data"]
+        self.assertEqual(payload["qa"]["status"], "pending")
+        self.assertIn("请补充风险因素", payload["qa"]["question"])
+        runtime.build_followup_prompt.assert_called_once_with("请补充风险因素")
+        runtime.enqueue_task_run.assert_called_once_with(
+            self.task.id,
+            prompt="followup:请补充风险因素",
+            create_report=False,
+            queued_step_name="开始处理追问",
+            run_metadata={"report_followup_id": followup.id},
+        )
