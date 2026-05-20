@@ -87,6 +87,10 @@ class UserPersonaRegistrationTests(TestCase):
         self.assertEqual(result["role"], ROLE_SUPER_ADMIN)
         self.assertFalse(result["should_prompt_persona"])
 
+        user = get_user_model().objects.get(pk=result["user_id"])
+        self.assertTrue(user.has_perm("users.view_user"))
+        self.assertTrue(user.has_perm("llm_manager.change_llmconfig"))
+
     def test_regular_registered_user_is_prompted(self):
         User = get_user_model()
         admin = User.objects.create_user(username="admin", password="test-pass-123")

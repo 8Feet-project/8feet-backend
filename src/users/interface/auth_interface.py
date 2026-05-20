@@ -13,7 +13,7 @@ from django.utils import timezone
 
 from users.models.auth_record import AuthRecord
 from users.models.user_profile import UserProfile, ROLE_SUPER_ADMIN, ROLE_USER
-from shared.permissions import to_product_permission_codes
+from shared.permissions import setup_groups, to_product_permission_codes
 
 
 def generate_access_token(user_id: int, access_token_delta: int = 3) -> str:
@@ -87,6 +87,9 @@ def register_user(
             # 检查是否是首个用户（初始化平台逻辑）
             is_first_user = not User.objects.exists()
             role = ROLE_SUPER_ADMIN if is_first_user else ROLE_USER
+
+            if is_first_user:
+                setup_groups()
             
             user = User.objects.create_user(
                 username=username,
