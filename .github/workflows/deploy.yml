@@ -212,7 +212,7 @@ jobs:
           BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" pull backend celery-worker
 
           echo "[deploy] updating application services"
-          BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" up -d --no-deps --remove-orphans backend celery-worker
+          BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" up -d --remove-orphans
           BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" ps
 
           echo "[deploy] waiting for readyz"
