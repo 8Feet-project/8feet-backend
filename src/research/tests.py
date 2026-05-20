@@ -663,6 +663,7 @@ class ResearchRealtimeReferenceTests(TestCase):
                     f"/api/v1/research/tasks/{task.id}/auto-advance",
                     data=json.dumps({"auto_advance": True}),
                     content_type="application/json",
+                    secure=True,
                 )
 
         payload = response.json()
