@@ -476,6 +476,56 @@ def _enrich_citations_from_state(report: Report, citations: list[dict[str, Any]]
                 "bibtex": _render_bibtex_entry(cite_key, item, state_item) if cite_key else "",
             }
         )
+    if len(enriched) >= len(used_keys):
+        return enriched
+
+    existing_keys = {
+        _normalize_cite_key(item.get("cite_key"))
+        for item in enriched
+        if _normalize_cite_key(item.get("cite_key"))
+    }
+    next_index = len(enriched) + 1
+    for cite_key in used_keys:
+        if cite_key in existing_keys:
+            continue
+        state_item = state_citations_by_key.get(cite_key)
+        if not state_item:
+            continue
+        authority = _authority_from_state_item(state_item)
+        source_url = str(state_item.get("url") or "").strip()
+        fallback_item = {
+            "id": f"state-{cite_key}",
+            "index_number": next_index,
+            "source_url": source_url,
+            "source_title": str(state_item.get("title") or cite_key).strip()[:512],
+            "cited_text_snippet": str(
+                state_item.get("summary")
+                or state_item.get("note")
+                or state_item.get("howpublished")
+                or ""
+            )[:2000],
+            "reproduction_code": (
+                state_item.get("reproduction_code")
+                or _structured_tool_reproduction_code(state_item)
+                or ""
+            ),
+        }
+        enriched.append(
+            {
+                **fallback_item,
+                "cite_key": cite_key,
+                "source_platform": state_item.get("source_platform") or "",
+                "source_type": _source_type_from_state_item(state_item),
+                "authority_score": authority["authority_score"],
+                "authority_tier": authority["authority_tier"],
+                "authority_label": authority["authority_label"],
+                "authority_reason": authority["authority_reason"],
+                "accessed_at": state_item.get("accessed_at") or "",
+                "bibtex": _render_bibtex_entry(cite_key, fallback_item, state_item),
+            }
+        )
+        existing_keys.add(cite_key)
+        next_index += 1
     return enriched
 
 
@@ -516,37 +566,46 @@ def _source_type_from_state_item(state_item: dict[str, Any]) -> str:
     return source_category or state_item.get("endpoint") or ""
 
 
-def _state_citations_by_url(report: Report) -> dict[str, dict[str, Any]]:
+def _state_citation_items(report: Report) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+
+    def collect(state: Any) -> None:
+        citations = state.get("citations", []) if isinstance(state, dict) else []
+        if not isinstance(citations, list):
+            return
+        items.extend(item for item in citations if isinstance(item, dict))
+
     conversation = getattr(report.task, "conversation", None)
-    state = getattr(conversation, "state_snapshot", None) if conversation is not None else None
-    citations = state.get("citations", []) if isinstance(state, dict) else []
-    if not isinstance(citations, list):
-        return {}
+    collect(getattr(conversation, "state_snapshot", None) if conversation is not None else None)
+
+    child_tasks = getattr(report.task, "child_tasks", None)
+    if child_tasks is not None:
+        for child_task in child_tasks.all():
+            child_conversation = getattr(child_task, "conversation", None)
+            collect(getattr(child_conversation, "state_snapshot", None) if child_conversation is not None else None)
+
+    return items
+
+
+def _state_citations_by_url(report: Report) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
-    for item in citations:
-        if not isinstance(item, dict):
-            continue
+    for item in _state_citation_items(report):
         url = str(item.get("url", "") or "").strip()
         if not url:
             continue
-        result[url] = item
+        if url not in result:
+            result[url] = item
     return result
 
 
 def _state_citations_by_key(report: Report) -> dict[str, dict[str, Any]]:
-    conversation = getattr(report.task, "conversation", None)
-    state = getattr(conversation, "state_snapshot", None) if conversation is not None else None
-    citations = state.get("citations", []) if isinstance(state, dict) else []
-    if not isinstance(citations, list):
-        return {}
     result: dict[str, dict[str, Any]] = {}
-    for item in citations:
-        if not isinstance(item, dict):
-            continue
+    for item in _state_citation_items(report):
         cite_key = _normalize_cite_key(item.get("cite_key"))
         if not cite_key:
             continue
-        result[cite_key] = item
+        if cite_key not in result:
+            result[cite_key] = item
     return result
 
 

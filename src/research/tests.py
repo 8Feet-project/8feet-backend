@@ -1774,6 +1774,92 @@ class ResearchProgressModelTests(SimpleTestCase):
         self.assertEqual(analysis_rows[0]["analysis_type"], "CROSS")
         self.assertEqual(step_rows[0]["task"], parent_task)
 
+    def test_cross_success_uses_union_of_model_thread_citations(self):
+        parent_task = SimpleNamespace(
+            id=7,
+            user=SimpleNamespace(id=3),
+            title="Acme 深度调研",
+        )
+        integrator_spec = CrossModelSpec(
+            "integrator",
+            "integrator",
+            "provider-a",
+            {"model": "integrator", "api_key": "k", "base_url": "u"},
+            llm_config_id=9,
+        )
+        model_citation = {
+            "cite_key": "SOURCE_A",
+            "url": "https://example.com/a",
+            "title": "来源 A",
+            "summary": "来源 A 摘要",
+        }
+        unused_model_citation = {
+            "cite_key": "SOURCE_B",
+            "url": "https://example.com/b",
+            "title": "来源 B",
+            "summary": "来源 B 摘要",
+        }
+
+        class FakeAnalysisManager:
+            def create(self, **kwargs):
+                return SimpleNamespace(id=61)
+
+        class FakeStepManager:
+            def create(self, **kwargs):
+                return SimpleNamespace(**kwargs)
+
+        class FakeConversationManager:
+            def filter(self, **kwargs):
+                return self
+
+            def first(self):
+                return None
+
+        with patch.object(cross_result_records.AnalysisResult, "objects", FakeAnalysisManager()):
+            with patch.object(cross_result_records.TaskStepLog, "objects", FakeStepManager()):
+                with patch.object(cross_result_records.ResearchConversation, "objects", FakeConversationManager()):
+                    with patch.object(cross_result_records.transaction, "atomic", return_value=nullcontext()):
+                        with patch.object(
+                            cross_result_records.research_runtime,
+                            "_extract_citations",
+                            side_effect=lambda state: state.get("citations", []) if isinstance(state, dict) else [],
+                        ):
+                            with patch.object(
+                                cross_result_records.research_runtime,
+                                "_create_report",
+                                return_value=SimpleNamespace(id=71),
+                            ) as create_report:
+                                with patch.object(cross_result_records, "_update_cross_log"):
+                                    with patch.object(cross_result_records, "_update_cross_progress"):
+                                        with patch.object(cross_result_records, "log_model_usage"):
+                                            cross_result_records._persist_cross_success(
+                                                task=parent_task,
+                                                run_id="run-1",
+                                                prompt="prompt",
+                                                model_results=[
+                                                    {
+                                                        "child_task_id": 21,
+                                                        "status": "completed",
+                                                        "state_snapshot": {"citations": [model_citation, unused_model_citation]},
+                                                    }
+                                                ],
+                                                integrator_result={
+                                                    "final_output": "结论来自模型报告[@SOURCE_A]。",
+                                                    "state_snapshot": {},
+                                                    "report_paths": ["/mnt/user-data/outputs/cross_validation_report.md"],
+                                                },
+                                                integrator_spec=integrator_spec,
+                                                latency_ms=20.0,
+                                                run_metadata={"source": "test"},
+                                            )
+
+        citations = create_report.call_args.args[2]
+        self.assertEqual(len(citations), 2)
+        self.assertEqual(citations[0]["cite_key"], "source_a")
+        self.assertEqual(citations[0]["title"], "来源 A")
+        self.assertEqual(citations[1]["cite_key"], "source_b")
+        self.assertEqual(citations[1]["title"], "来源 B")
+
 
 class CrossValidationEnqueueTests(SimpleTestCase):
     def test_enqueue_cross_validation_run_records_queued_log_without_running_models(self):

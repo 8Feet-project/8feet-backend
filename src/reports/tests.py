@@ -136,6 +136,43 @@ class ReportCitationDetailApiTests(TestCase):
             self.scraped_content.scraped_at.astimezone().isoformat(),
         )
 
+    def test_report_detail_backfills_missing_citation_rows_from_state_keys(self):
+        self.report.content_markdown = "# 报告\n\n结论来自模型线程保留的引用[@THREAD_SOURCE]。"
+        self.report.save(update_fields=["content_markdown"])
+        self.citation.delete()
+        ResearchConversation.objects.create(
+            task=self.task,
+            thread_id="thread-state-only-citation",
+            state_snapshot={
+                "citations": [
+                    {
+                        "cite_key": "THREAD_SOURCE",
+                        "url": "https://example.com/thread-source",
+                        "title": "线程来源",
+                        "source_platform": "example.com",
+                        "provider": "web_fetch",
+                        "tool_name": "web_fetch",
+                        "authority_score": 4,
+                        "summary": "线程来源摘要",
+                        "accessed_at": "2026-05-10T12:00:00",
+                    }
+                ]
+            },
+        )
+
+        response = self.client.get(f"/api/v1/reports/{self.report.id}", secure=True)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["data"]
+        self.assertEqual(len(payload["citations"]), 1)
+        citation = payload["citations"][0]
+        self.assertEqual(citation["citation_id"], "state-thread_source")
+        self.assertEqual(citation["index_number"], 1)
+        self.assertEqual(citation["cite_key"], "thread_source")
+        self.assertEqual(citation["source_title"], "线程来源")
+        self.assertEqual(citation["source_url"], "https://example.com/thread-source")
+        self.assertEqual(citation["authority_label"], "专业高可信来源")
+
     def test_url_less_citation_exposes_state_metadata_and_reproduction_code(self):
         self.report.content_markdown = (
             "# 报告\n\n"

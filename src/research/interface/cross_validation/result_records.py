@@ -6,8 +6,9 @@ from django.db import transaction
 
 from llm_manager.interface.llm_interface import log_model_usage
 from research.interface import research_runtime
+from reports.interface.report_interface import cite_keys_from_markdown, normalize_report_markdown
 from research.interface.thread_codec import json_safe
-from research.models import AnalysisResult, ResearchTask, TaskStepLog
+from research.models import AnalysisResult, ResearchConversation, ResearchTask, TaskStepLog
 
 from .artifacts import _latest_report_payload
 from .run_logs import _update_cross_log, _update_cross_progress
@@ -36,6 +37,19 @@ def _persist_cross_success(
         else []
     )
     brief_output = str(latest_report.get("brief_content") or "").strip() if latest_report else ""
+    final_citations = _cross_report_citations(
+        report_markdown="\n".join(
+            part
+            for part in (
+                final_output,
+                brief_output,
+                str(latest_report.get("content") or "") if latest_report else "",
+            )
+            if str(part or "").strip()
+        ),
+        integrator_citations=report_citations or citations,
+        model_results=model_results,
+    )
     with transaction.atomic():
         analysis = AnalysisResult.objects.create(
             task=task,
@@ -54,10 +68,11 @@ def _persist_cross_success(
             },
         )
         if final_output:
+            _sync_parent_conversation_citations(task, final_citations)
             research_runtime._create_report(
                 task,
                 final_output,
-                report_citations or citations,
+                final_citations,
                 brief_output=brief_output,
             )
 
@@ -97,3 +112,77 @@ def _persist_cross_success(
         latency_ms=int(latency_ms or 0),
         usage_type="GENERAL",
     )
+
+
+def _cross_report_citations(
+    *,
+    report_markdown: str,
+    integrator_citations: list[dict[str, Any]],
+    model_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    citations = research_runtime._merge_citation_snapshots([], integrator_citations)
+    for result in model_results:
+        if not isinstance(result, dict) or result.get("status") != "completed":
+            continue
+        citations = research_runtime._merge_citation_snapshots(
+            citations,
+            _model_result_citations(result),
+        )
+
+    used_keys = cite_keys_from_markdown(normalize_report_markdown(report_markdown))
+    if not used_keys:
+        return citations
+
+    by_key = {
+        str(item.get("cite_key") or "").strip().lower(): item
+        for item in citations
+        if str(item.get("cite_key") or "").strip()
+    }
+    prioritized_keys: set[str] = set()
+    prioritized: list[dict[str, Any]] = []
+    for key in used_keys:
+        item = by_key.get(key)
+        if not item:
+            continue
+        prioritized.append(item)
+        prioritized_keys.add(key)
+    prioritized.extend(
+        item
+        for item in citations
+        if str(item.get("cite_key") or "").strip().lower() not in prioritized_keys
+    )
+    return prioritized or citations
+
+
+def _model_result_citations(result: dict[str, Any]) -> list[dict[str, Any]]:
+    citations = research_runtime._extract_citations(result.get("state_snapshot") or {})
+    presented_reports = result.get("presented_reports")
+    if isinstance(presented_reports, list):
+        for report in presented_reports:
+            if not isinstance(report, dict):
+                continue
+            report_citations = report.get("citations")
+            if isinstance(report_citations, list):
+                citations = research_runtime._merge_citation_snapshots(
+                    citations,
+                    [item for item in report_citations if isinstance(item, dict)],
+                )
+    return citations
+
+
+def _sync_parent_conversation_citations(task: ResearchTask, citations: list[dict[str, Any]]) -> None:
+    if not citations:
+        return
+    conversation = ResearchConversation.objects.filter(task=task).first()
+    if conversation is None:
+        return
+    state_snapshot = conversation.state_snapshot if isinstance(conversation.state_snapshot, dict) else {}
+    state_snapshot = {
+        **state_snapshot,
+        "citations": research_runtime._merge_citation_snapshots(
+            state_snapshot.get("citations"),
+            citations,
+        ),
+    }
+    conversation.state_snapshot = state_snapshot
+    conversation.save(update_fields=["state_snapshot", "updated_at"])
