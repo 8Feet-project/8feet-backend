@@ -20,7 +20,6 @@ Stages:
 - Run backend tests:
   - `research.tests`
   - `llm_manager.tests`
-  - `analytics.tests`
 - Build the Docker image without pushing it
 
 The CI job starts PostgreSQL and Redis service containers so future
@@ -65,15 +64,6 @@ repository, Docker, and Docker Compose. Runtime secrets such as
 `DJANGO_SECRET_KEY`, database passwords, Redis credentials, and S3 credentials
 should live in the server-side `.env` file used by `docker-compose.yml`.
 
-The deployed Docker Compose stack runs three application services from the same
-backend image:
-
-- `backend`: Daphne/Django HTTP and WebSocket server.
-- `celery-worker`: asynchronous jobs such as report exports and research tasks.
-- `celery-beat`: scheduler for periodic jobs, including daily/weekly alert
-  reminders. Keep this service running in production; otherwise alert updates can
-  still enqueue immediate work, but configured reminder times will not be scanned.
-
 ## Deployment Flow
 
 Automatic production deployment:
@@ -96,11 +86,11 @@ The SSH deploy step runs:
 
 ```bash
 git fetch origin
-git worktree add --force --detach <temporary-worktree> <ref>
-BACKEND_IMAGE=<image-ref> docker compose pull backend celery-worker celery-beat
-BACKEND_IMAGE=<image-ref> docker compose up -d --remove-orphans
+git checkout <ref>
+git pull --ff-only origin <ref>
+docker compose up -d --build
 docker compose ps
-curl -fsS -H 'Host: 8feet.meteor041.com' http://127.0.0.1:48881/readyz
+curl -fsS http://127.0.0.1:8000/readyz
 ```
 
 ## Rollback
@@ -118,7 +108,6 @@ If the server cannot be reached by GitHub Actions, SSH into the server and run:
 cd <DEPLOY_APP_DIR>
 git fetch origin
 git checkout <known-good-ref>
-docker compose pull backend celery-worker celery-beat
-docker compose up -d --remove-orphans
-curl -fsS -H 'Host: 8feet.meteor041.com' http://127.0.0.1:48881/readyz
+docker compose up -d --build
+curl -fsS http://127.0.0.1:8000/readyz
 ```
