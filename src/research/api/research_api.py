@@ -24,6 +24,7 @@ from research.interface.research_interface import (
     respond_to_step,
 )
 from research.interface.cross_validation_runtime import (
+    CROSS_VALIDATION_STEP_NAME,
     enqueue_cross_validation_run,
     get_cross_validation_payload,
 )
@@ -201,6 +202,16 @@ def _coerce_bool(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _cross_validation_auto_forced(task: ResearchTask) -> bool:
+    params = task.search_params if isinstance(task.search_params, dict) else {}
+    if _coerce_bool(params.get("enable_cross_validation")) or isinstance(
+        params.get("cross_validation_child"),
+        dict,
+    ):
+        return True
+    return TaskStepLog.objects.filter(task=task, step_name=CROSS_VALIDATION_STEP_NAME).exists()
+
+
 def _latest_pending_step_approval(task_id: int) -> TaskStepLog | None:
     steps = TaskStepLog.objects.filter(
         task_id=task_id,
@@ -258,6 +269,26 @@ def _workflow_payload(detail: dict[str, Any]) -> dict[str, Any]:
         value = detail.get(key)
         if value is not None and str(value).strip():
             payload[key] = str(value).strip()
+    for key in (
+        "cross_validation_run_id",
+        "actor",
+        "thread_id",
+        "child_task_id",
+        "model",
+        "model_count",
+        "status",
+        "error",
+        "latency_ms",
+        "report_paths",
+        "child_tasks",
+        "models",
+        "integrator_model",
+        "input_count",
+        "copy_manifests",
+    ):
+        value = detail.get(key)
+        if value not in (None, ""):
+            payload[key] = value
     if event_type in {"tool_call", "subagent_tool_call"}:
         payload["input"] = detail.get("args", {})
     elif event_type in {"tool_result", "subagent_tool_result"}:
@@ -1089,6 +1120,8 @@ def create_task(request: HttpRequest):
     ):
         if key in data and data.get(key) is not None:
             search_params[key] = data.get(key)
+    if _coerce_bool(search_params.get("enable_cross_validation")):
+        search_params["auto_advance"] = True
     if "auto_advance" in search_params:
         search_params["auto_advance"] = _coerce_bool(search_params.get("auto_advance"))
 
@@ -1168,7 +1201,10 @@ def task_status(request: HttpRequest, task_id: int):
         "object_name": task.object_name,
         "object_type": _frontend_object_type(task.object_type),
         "waiting_intervention": task.status == "WAITING_USER",
-        "auto_advance": _coerce_bool((task.search_params or {}).get("auto_advance")),
+        "auto_advance": True if _cross_validation_auto_forced(task) else _coerce_bool((task.search_params or {}).get("auto_advance")),
+        "cross_validation_enabled": _cross_validation_auto_forced(task),
+        "task_role": task.task_role,
+        "parent_task_id": str(task.parent_task_id) if task.parent_task_id else "",
         "metrics_summary": [],
         "available_actions": ["cancel"] if task.status not in ("COMPLETED", "FAILED", "CANCELLED") else [],
     })
@@ -1183,6 +1219,8 @@ def task_auto_advance(request: HttpRequest, task_id: int):
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
     data = _request_data(request)
     auto_advance = _coerce_bool(data.get("auto_advance"))
+    if _cross_validation_auto_forced(task):
+        auto_advance = True
     task.search_params = {**(task.search_params or {}), "auto_advance": auto_advance}
     task.save(update_fields=["search_params", "updated_at"])
     resumed = False
@@ -1325,6 +1363,14 @@ def task_steps(request: HttpRequest, task_id: int):
     subagent_workflows = _extract_subagent_workflows(raw_nodes)
     _attach_subagent_workflows(raw_nodes, subagent_workflows)
     raw_nodes = [n for n in raw_nodes if not n.get("_is_subagent_node")]
+    for node in raw_nodes:
+        payload = node.get("payload") if isinstance(node.get("payload"), dict) else {}
+        actor = str(payload.get("actor") or "")
+        if actor.startswith("model:") or actor == "integrator":
+            node["node_id"] = f"{actor}:{node['node_id']}"
+            paired = str(node.get("paired_node_id") or "").strip()
+            if paired:
+                node["paired_node_id"] = f"{actor}:{paired}"
     _pair_workflow_nodes(raw_nodes)
     nodes = _collapse_agent_step_nodes(raw_nodes)
     nodes = _split_report_message_nodes(nodes, report_payload)
