@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from llm_manager.interface.llm_interface import (
+    get_default_summarize_config,
     get_provider_runtime_config,
     resolve_user_model_config,
     user_can_use_model,
@@ -57,6 +58,9 @@ def resolve_integrator_model_spec(
         raw = str(cross_params.get("integrator_model_id") or cross_params.get("integrator_model") or "").strip()
         if raw:
             return _resolve_model_spec(task, raw, allow_env_models=allow_env_models)
+    recommended_config = get_default_summarize_config(task.user, task.object_type)
+    if recommended_config is not None:
+        return _resolve_config_model_spec(task, recommended_config.id)
     if task.llm_config_id:
         return _resolve_model_spec(task, str(task.llm_config_id), allow_env_models=allow_env_models)
     if model_specs:

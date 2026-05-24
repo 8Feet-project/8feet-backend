@@ -21,6 +21,7 @@ from llm_manager.interface.llm_interface import (
     list_llm_configs,
     serialize_model_available,
     serialize_model_detail,
+    set_default_summary_model,
     test_llm_config_connection,
     toggle_llm_config,
     update_llm_config,
@@ -269,3 +270,17 @@ def assign_model_permissions(request: HttpRequest, model_id: int):
         return failed_api_response(error_code, message)
 
     return success_api_response({"model_id": str(model_id), "granted_count": granted})
+
+
+@response_wrapper
+@require_POST
+@jwt_auth(perms=['llm_manager.change_llmconfig'])
+def default_summary_model(request: HttpRequest, model_id: int):
+    """Set or clear the model used by summary/integration recommendations."""
+    data = _request_data(request)
+    enabled = _to_bool(data.get("enabled", data.get("is_default", True)), True)
+    success, message, payload = set_default_summary_model(model_id, enabled)
+    if not success:
+        error_code = ErrorCode.ITEM_NOT_FOUND if message == "模型不存在" else ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR
+        return failed_api_response(error_code, message)
+    return success_api_response(payload)

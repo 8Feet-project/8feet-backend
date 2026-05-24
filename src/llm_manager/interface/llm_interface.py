@@ -19,6 +19,7 @@ from llm_manager.models.model_permission import (
     OBJECT_TYPE_PRODUCT,
     OBJECT_TYPE_STOCK,
     USAGE_TYPE_GENERAL,
+    USAGE_TYPE_SUMMARIZE,
 )
 from llm_manager.models.model_usage import ModelUsage
 
@@ -32,6 +33,12 @@ OBJECT_TYPE_ALIASES = {
     OBJECT_TYPE_STOCK.lower(): OBJECT_TYPE_STOCK,
     OBJECT_TYPE_PRODUCT.lower(): OBJECT_TYPE_PRODUCT,
 }
+
+RECOMMENDABLE_OBJECT_TYPES = (
+    OBJECT_TYPE_COMPANY,
+    OBJECT_TYPE_STOCK,
+    OBJECT_TYPE_PRODUCT,
+)
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -378,6 +385,11 @@ def _grant_scope_summary(config: LLMConfig) -> str:
 
 def serialize_admin_model_item(config: LLMConfig) -> dict:
     params = config.params or {}
+    summarize_defaults = list(
+        config.object_mappings
+        .filter(usage_type=USAGE_TYPE_SUMMARIZE, is_default=True)
+        .values_list("object_type", flat=True)
+    )
     return {
         "model_id": str(config.id),
         "model_name": config.name,
@@ -389,12 +401,14 @@ def serialize_admin_model_item(config: LLMConfig) -> dict:
         "connectivity_status": _connectivity_status(config),
         "updated_at": config.updated_at.isoformat() if config.updated_at else "",
         "granted_scope_summary": _grant_scope_summary(config),
+        "default_summary_object_types": summarize_defaults,
+        "is_default_summary_model": bool(summarize_defaults),
     }
 
 
 def list_llm_configs(is_enabled: bool = None) -> list[dict]:
     """获取大模型配置列表，管理端使用。"""
-    query = LLMConfig.objects.all().prefetch_related('user_permissions').order_by('id')
+    query = LLMConfig.objects.all().prefetch_related('user_permissions', 'object_mappings').order_by('id')
     if is_enabled is not None:
         query = query.filter(is_enabled=is_enabled)
     return [serialize_admin_model_item(config) for config in query]
@@ -496,6 +510,56 @@ def assign_model_permissions(
     return (True, None, len(users) + len(roles))
 
 
+def set_default_summary_model(config_id: int, enabled: bool = True) -> tuple[bool, str | None, dict]:
+    """Set or clear the platform default model for summary/integration work."""
+    config = LLMConfig.objects.filter(pk=config_id).first()
+    if not config:
+        return (False, "模型不存在", {})
+    if enabled and (not config.is_enabled or not config.is_online):
+        return (False, "只能将已启用且在线的模型设为默认推荐模型", {})
+
+    with transaction.atomic():
+        ModelObjectMapping.objects.filter(
+            usage_type=USAGE_TYPE_SUMMARIZE,
+            object_type__in=RECOMMENDABLE_OBJECT_TYPES,
+            is_default=True,
+        ).exclude(llm_config=config).update(is_default=False)
+
+        if enabled:
+            for object_type in RECOMMENDABLE_OBJECT_TYPES:
+                mapping, _created = ModelObjectMapping.objects.get_or_create(
+                    llm_config=config,
+                    object_type=object_type,
+                    usage_type=USAGE_TYPE_SUMMARIZE,
+                    defaults={"priority": 100, "is_default": True},
+                )
+                changed = False
+                if not mapping.is_default:
+                    mapping.is_default = True
+                    changed = True
+                if mapping.priority < 100:
+                    mapping.priority = 100
+                    changed = True
+                if changed:
+                    mapping.save(update_fields=["is_default", "priority"])
+        else:
+            ModelObjectMapping.objects.filter(
+                llm_config=config,
+                usage_type=USAGE_TYPE_SUMMARIZE,
+                object_type__in=RECOMMENDABLE_OBJECT_TYPES,
+            ).update(is_default=False)
+
+    return (
+        True,
+        None,
+        {
+            "model_id": str(config.id),
+            "is_default_summary_model": bool(enabled),
+            "default_summary_object_types": list(RECOMMENDABLE_OBJECT_TYPES) if enabled else [],
+        },
+    )
+
+
 def list_available_models(
     user,
     object_type: str | None = None,
@@ -546,6 +610,38 @@ def get_recommended_model(
 ) -> Optional[dict]:
     config = get_recommended_config(user, object_type, usage_type)
     return serialize_model_available(config) if config else None
+
+
+def get_default_recommended_config(
+    user,
+    object_type: str,
+    usage_type: str = USAGE_TYPE_GENERAL,
+) -> LLMConfig | None:
+    """Return an explicit admin default mapping when the user can use it."""
+    normalized_object_type = normalize_object_type(object_type)
+    normalized_usage_type = normalize_usage_type(usage_type)
+    if not normalized_object_type:
+        return None
+    mapping = (
+        ModelObjectMapping.objects
+        .filter(
+            object_type=normalized_object_type,
+            usage_type=normalized_usage_type,
+            is_default=True,
+            llm_config__is_enabled=True,
+            llm_config__is_online=True,
+        )
+        .select_related("llm_config")
+        .order_by("-priority", "llm_config_id")
+        .first()
+    )
+    if not mapping or not user_can_use_model(user, mapping.llm_config):
+        return None
+    return mapping.llm_config
+
+
+def get_default_summarize_config(user, object_type: str) -> LLMConfig | None:
+    return get_default_recommended_config(user, object_type, USAGE_TYPE_SUMMARIZE)
 
 
 def build_routing_recommendation(

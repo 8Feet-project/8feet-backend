@@ -1,12 +1,16 @@
 from unittest.mock import MagicMock, patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from llm_manager.interface.llm_interface import (
     create_or_update_llm_config,
     get_provider_runtime_config,
     normalize_provider_base_url,
+    serialize_admin_model_item,
+    set_default_summary_model,
 )
+from llm_manager.models import LLMConfig, ModelObjectMapping
+from llm_manager.models.model_permission import USAGE_TYPE_SUMMARIZE
 
 
 class ProviderBaseUrlTests(SimpleTestCase):
@@ -52,6 +56,52 @@ class CreateOrUpdateLLMConfigTests(SimpleTestCase):
         _, kwargs = objects.create.call_args
         self.assertIs(kwargs["is_enabled"], True)
         self.assertIs(kwargs["is_online"], False)
+
+
+class DefaultSummaryModelTests(TestCase):
+    def test_set_default_summary_model_replaces_existing_defaults(self):
+        previous = LLMConfig.objects.create(
+            name="previous",
+            provider="OpenAI",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="previous-key",
+        )
+        selected = LLMConfig.objects.create(
+            name="selected",
+            provider="OpenAI",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="selected-key",
+        )
+        ModelObjectMapping.objects.create(
+            llm_config=previous,
+            object_type="COMPANY",
+            usage_type=USAGE_TYPE_SUMMARIZE,
+            priority=100,
+            is_default=True,
+        )
+
+        success, message, payload = set_default_summary_model(selected.id, True)
+
+        self.assertTrue(success, message)
+        self.assertEqual(payload["model_id"], str(selected.id))
+        self.assertFalse(
+            ModelObjectMapping.objects.filter(
+                llm_config=previous,
+                usage_type=USAGE_TYPE_SUMMARIZE,
+                is_default=True,
+            ).exists()
+        )
+        self.assertEqual(
+            ModelObjectMapping.objects.filter(
+                llm_config=selected,
+                usage_type=USAGE_TYPE_SUMMARIZE,
+                is_default=True,
+            ).count(),
+            3,
+        )
+        serialized = serialize_admin_model_item(selected)
+        self.assertTrue(serialized["is_default_summary_model"])
+        self.assertIn("COMPANY", serialized["default_summary_object_types"])
 
 
 class ProviderRuntimeConfigTests(SimpleTestCase):

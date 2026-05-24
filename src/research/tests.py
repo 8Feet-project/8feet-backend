@@ -10,6 +10,8 @@ from django.contrib.auth import get_user_model
 from django.test import Client, SimpleTestCase, TestCase
 from django.utils import timezone
 
+from llm_manager.models import LLMConfig, ModelObjectMapping
+from llm_manager.models.model_permission import USAGE_TYPE_SUMMARIZE
 from reports.interface.report_interface import get_report_detail
 from reports.models.citation import Citation
 from reports.models.report import Report
@@ -23,7 +25,7 @@ from research.interface.cross_validation.artifacts import (
     _report_paths_from_payloads,
     _strip_tool_call_markup,
 )
-from research.interface.cross_validation.model_specs import _coerce_model_id_list
+from research.interface.cross_validation.model_specs import _coerce_model_id_list, resolve_integrator_model_spec
 from research.interface.cross_validation.orchestrator import _integrator_candidates
 from research.interface.cross_validation.payloads import _payload_from_result
 from research.interface.cross_validation_runtime import (
@@ -701,6 +703,55 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertIn("web_search 只用于发现候选网址", prompt)
         self.assertIn("brief_report_path", prompt)
         self.assertIn("present_report", prompt)
+
+
+class CrossValidationIntegratorModelTests(TestCase):
+    def test_integrator_uses_default_summarize_model_before_parent_model(self):
+        user = get_user_model().objects.create_user(
+            username="cross-integrator-default-user",
+            is_superuser=True,
+        )
+        parent_config = LLMConfig.objects.create(
+            name="parent-model",
+            provider="OpenAI",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="parent-key",
+        )
+        summary_config = LLMConfig.objects.create(
+            name="summary-model",
+            provider="OpenAI",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="summary-key",
+        )
+        ModelObjectMapping.objects.create(
+            llm_config=summary_config,
+            object_type="COMPANY",
+            usage_type=USAGE_TYPE_SUMMARIZE,
+            priority=100,
+            is_default=True,
+        )
+        task = ResearchTask.objects.create(
+            user=user,
+            title="Acme",
+            object_name="Acme",
+            object_type="COMPANY",
+            llm_config=parent_config,
+            status="COMPLETED",
+        )
+        model_specs = [
+            CrossModelSpec(
+                "model-a",
+                "model-a",
+                "env",
+                {"model": "model-a", "api_key": "k", "base_url": "u"},
+                order=1,
+            )
+        ]
+
+        spec = resolve_integrator_model_spec(task, None, model_specs)
+
+        self.assertEqual(spec.llm_config_id, summary_config.id)
+        self.assertEqual(spec.model_name, "summary-model")
 
 
 class ResearchProgressModelTests(SimpleTestCase):
