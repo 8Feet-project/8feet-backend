@@ -8,6 +8,7 @@ from research.interface.cross_validation.model_specs import (
 from research.interface.cross_validation.orchestrator import enqueue_cross_validation_run
 from research.interface.cross_validation.payloads import get_cross_validation_payload
 from research.interface.cross_validation.prompts import (
+    build_cross_validation_base_prompt,
     build_cross_integrator_prompt,
     build_cross_integrator_system_message,
     build_cross_model_research_prompt,
@@ -26,6 +27,7 @@ __all__ = [
     "get_cross_validation_payload",
     "resolve_cross_model_specs",
     "resolve_integrator_model_spec",
+    "build_cross_validation_base_prompt",
     "build_cross_model_research_prompt",
     "build_cross_integrator_system_message",
     "build_cross_integrator_prompt",

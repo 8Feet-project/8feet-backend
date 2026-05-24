@@ -12,6 +12,28 @@ from research.interface.thread_codec import json_safe
 from research.models import ResearchTask
 
 
+def build_cross_validation_base_prompt(task: ResearchTask) -> str:
+    search_params = json.dumps(
+        json_safe(getattr(task, "search_params", {}) or {}),
+        ensure_ascii=False,
+        indent=2,
+    )
+    object_contract = object_type_research_requirements(getattr(task, "object_type", ""))
+    return (
+        "请围绕以下商业对象开展一次独立商业调研，并输出结构化 Markdown 详细报告与简版报告。\n\n"
+        f"- 调研标题: {getattr(task, 'title', '')}\n"
+        f"- 调研对象: {getattr(task, 'object_name', '')}\n"
+        f"- 对象类型: {getattr(task, 'object_type', '')}\n\n"
+        f"{object_contract}\n"
+        "任务要求:\n"
+        "1. 交叉验证固定自动推进；独立完成检索、证据读取、分析和报告定稿，不委托子代理。\n"
+        "2. 必须优先覆盖上方对象类型专项调研框架，再补充通用商业分析维度。\n"
+        "3. web_search 只用于发现候选网址；事实结论必须由 web_fetch 或结构化业务数据工具返回的 citation key 支撑。\n"
+        "4. 证据不足时说明不确定性并完成报告，不要无限检索。\n\n"
+        f"补充检索参数:\n```json\n{search_params}\n```"
+    )
+
+
 def build_cross_model_research_prompt(task: ResearchTask, base_prompt: str) -> str:
     base_text = base_prompt.strip()
     object_contract = object_type_research_requirements(getattr(task, "object_type", ""))
@@ -28,7 +50,7 @@ def build_cross_model_research_prompt(task: ResearchTask, base_prompt: str) -> s
         )
     return (
         "你现在是多模型交叉验证中的一个独立调研线程。"
-        "请不要参考其他模型的输出，也不要等待外部人工反馈。"
+        "请不要参考其他模型的输出；本流程固定自动推进。"
         "请独立完成完整调研，分别写入详细版与简版 Markdown 报告文件，并调用 present_report 同时展示两份报告。\n\n"
         "报告文件路径建议使用:\n"
         "- /mnt/user-data/outputs/model_research_report.md\n"

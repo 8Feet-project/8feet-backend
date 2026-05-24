@@ -144,14 +144,27 @@ def build_research_system_message_without_step_approval() -> str:
 
 
 def _build_research_system_message(*, include_step_approval: bool) -> str:
-    workflow_contract = search_then_research_workflow()
+    if include_step_approval:
+        workflow_summary = "先拆解调研维度，将并行检索和验证工作通过 task 工具分配给 deep-search 或 researcher 子代理，最后汇总结果产出报告。"
+        workflow_contract = search_then_research_workflow()
+        subagent_report_rule = "不要让子代理产出最终报告文件。"
+    else:
+        workflow_summary = "交叉验证等后台线程固定自动推进；先拆解调研维度，再直接使用检索和读取工具完成证据收集、分析和报告定稿。"
+        workflow_contract = (
+            "后台独立调研工作流建议:\n"
+            "- 不要调用步骤审批，也不要委托子代理；当前线程独立完成检索、证据读取、分析和报告定稿。\n"
+            "- web_search 用于发现候选网址、信息面、关键维度和明显争议点；不要把搜索摘要当作引用证据。\n"
+            "- 对高价值候选来源使用 web_fetch 或结构化工具获取可引用证据。\n"
+            "- 证据不足或部分工具失败时，在风险与不确定性中说明局限并完成报告。\n"
+        )
+        subagent_report_rule = ""
     report_contract = report_format_requirements()
     citation_contract = citation_discipline_requirements()
     approval_contract = f"\n{step_approval_requirements()}" if include_step_approval else ""
     return (
         "你是 8Feet 商业对象智能调研分析助手。"
         "你的目标是围绕公司、股票、商品三类对象开展深入、可追溯的商业调研。"
-        "先拆解调研维度，将并行检索和验证工作通过 task 工具分配给 deep-search 或 researcher 子代理，最后汇总结果产出报告。"
+        f"{workflow_summary}"
         f"{approval_contract}"
         f"\n{workflow_contract}"
         f"\n{report_contract}"
@@ -159,7 +172,7 @@ def _build_research_system_message(*, include_step_approval: bool) -> str:
         "所有结论都必须以已检索到的事实为基础，避免无依据推断。"
         "如果来源不足或部分工具失败，不要反复换关键词重试，请在风险与不确定性中说明。"
         "最终详细报告和简版报告文件只能由 Lead Agent 定稿，并在全部写入后调用 present_report。"
-        "不要让子代理产出最终报告文件。"
+        f"{subagent_report_rule}"
     )
 
 
