@@ -43,6 +43,22 @@ Linux:
 uv run python src/manage.py runserver 127.0.0.1:48881
 ```
 
+### 6. 启动异步任务与定时提醒
+
+报告导出、调研后台执行等异步任务需要 Celery worker：
+
+```bash
+cd src
+uv run celery -A eightfeet worker -l info
+```
+
+提醒消息中的每日/每周定时调研依赖 Celery beat 扫描到期提醒。若只启动 worker，手动“更新状态”立即触发仍可执行，但到点自动触发不会运行：
+
+```bash
+cd src
+uv run celery -A eightfeet beat -l info
+```
+
 ## 模块架构
 
 | 模块 | URL 前缀 | 说明 |

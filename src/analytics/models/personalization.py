@@ -6,6 +6,8 @@ FR-GRXX-0003: 动态更新提醒
 from django.db import models
 from django.contrib.auth import get_user_model
 
+from research.models.research_task import ResearchTask
+
 
 class Favorite(models.Model):
     """收藏记录
@@ -67,10 +69,22 @@ class Alert(models.Model):
     notify_email = models.BooleanField(
         default=True, help_text="是否邮件同步推送"
     )
+    notify_in_app = models.BooleanField(
+        default=True, help_text="是否站内消息推送"
+    )
     is_active = models.BooleanField(default=True)
     last_triggered_at = models.DateTimeField(
         null=True, blank=True,
         help_text="上次触发时间"
+    )
+    next_run_at = models.DateTimeField(
+        null=True, blank=True, db_index=True,
+        help_text="下次计划触发时间"
+    )
+    last_task = models.ForeignKey(
+        ResearchTask, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='triggered_alerts',
+        help_text="最近一次由该提醒触发的调研任务"
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -100,6 +114,10 @@ class UserMessage(models.Model):
     )
     title = models.CharField(max_length=256)
     content = models.TextField()
+    action_url = models.CharField(
+        max_length=512, blank=True, default='',
+        help_text="消息点击跳转地址"
+    )
     message_type = models.CharField(
         max_length=16, choices=MESSAGE_TYPE_CHOICES, default='ALERT'
     )

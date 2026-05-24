@@ -16,6 +16,16 @@ def populate_brief_content(sender, instance: Report, **kwargs):
         instance.content_brief = build_brief_from_markdown(instance)
 
 
+@receiver(post_save, sender=Report)
+def notify_alert_report_ready(sender, instance: Report, created: bool, **kwargs):
+    """提醒触发的调研报告生成后通知用户。"""
+    if not created:
+        return
+    from analytics.interface.analytics_interface import dispatch_alert_report_ready
+
+    dispatch_alert_report_ready(instance)
+
+
 @receiver(post_save, sender=AnalysisResult)
 def generate_or_update_report_from_analysis(sender, instance: AnalysisResult, created: bool, **kwargs):
     """分析结果落库后自动生成或更新报告。"""

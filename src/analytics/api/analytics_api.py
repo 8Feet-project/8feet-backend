@@ -14,7 +14,7 @@ from shared.utils import (
 from analytics.interface.analytics_interface import (
     get_dashboard_stats, add_favorite,
     list_favorites, create_alert, list_alerts,
-    get_cost_report
+    get_cost_report, trigger_alert_now, following_run_after
 )
 
 
@@ -77,14 +77,19 @@ def _serialize_favorite(item: dict) -> dict:
 
 
 def _serialize_alert(item: dict) -> dict:
+    condition = item.get("condition") or {}
     return {
         "alert_id": str(item.get("id")),
         "object_name": item.get("object_name") or "",
         "object_type": _normalize_object_type(item.get("object_type")),
-        "push_in_app": True,
+        "push_in_app": bool(item.get("notify_in_app", True)),
         "push_email": bool(item.get("notify_email", True)),
-        "schedule_rule": (item.get("condition") or {}).get("schedule_rule", "daily"),
+        "schedule_rule": condition.get("schedule_rule", "daily"),
+        "schedule_time": condition.get("schedule_time", "09:00"),
         "status": "enabled" if item.get("is_active", True) else "disabled",
+        "next_run_at": item.get("next_run_at").isoformat() if hasattr(item.get("next_run_at"), "isoformat") else str(item.get("next_run_at") or ""),
+        "last_triggered_at": item.get("last_triggered_at").isoformat() if hasattr(item.get("last_triggered_at"), "isoformat") else str(item.get("last_triggered_at") or ""),
+        "last_task_id": str(item.get("last_task_id") or ""),
     }
 
 
@@ -256,8 +261,24 @@ def alert_create(request: HttpRequest):
     if not object_type or not object_name:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "参数不全")
 
-    condition = {"schedule_rule": data.get("schedule_rule", "daily")}
-    alert_id = create_alert(request.user.id, object_type, object_name, condition, bool(data.get("push_email", True)))
+    condition = {
+        "schedule_rule": data.get("schedule_rule", "daily"),
+        "schedule_time": data.get("schedule_time", "09:00"),
+        "time_range": data.get("time_range", "30d"),
+        "source_authority": data.get("source_authority", "unrestricted"),
+        "source_types": data.get("source_types") or ["official", "data", "research", "news"],
+        "research_focus": data.get("research_focus") or ["overview"],
+        "search_params": data.get("search_params") or {},
+        "model_id": data.get("model_id") or "",
+    }
+    alert_id = create_alert(
+        request.user.id,
+        object_type,
+        object_name,
+        condition,
+        bool(data.get("push_email", True)),
+        bool(data.get("push_in_app", True)),
+    )
     return success_api_response({"alert_id": str(alert_id), "status": "enabled"})
 
 
@@ -297,14 +318,36 @@ def alert_detail(request: HttpRequest, alert_id: int):
         if "push_email" in data:
             alert.notify_email = bool(data.get("push_email"))
             updated.append("push_email")
+        if "push_in_app" in data:
+            alert.notify_in_app = bool(data.get("push_in_app"))
+            updated.append("push_in_app")
         if "status" in data:
             alert.is_active = data.get("status") == "enabled"
             updated.append("status")
         if "schedule_rule" in data:
             alert.condition = {**(alert.condition or {}), "schedule_rule": data.get("schedule_rule")}
             updated.append("schedule_rule")
-        alert.save(update_fields=["notify_email", "is_active", "condition"])
-        return success_api_response({"alert_id": str(alert.id), "updated_fields": updated})
+        if "schedule_time" in data:
+            alert.condition = {**(alert.condition or {}), "schedule_time": data.get("schedule_time")}
+            updated.append("schedule_time")
+        if "schedule_rule" in data or "schedule_time" in data:
+            alert.next_run_at = following_run_after(alert)
+            updated.append("next_run_at")
+        alert.save(update_fields=["notify_email", "notify_in_app", "is_active", "condition", "next_run_at"])
+
+        triggered_task_id = None
+        trigger_error = ""
+        if "status" in data and alert.is_active:
+            ok, trigger_error, triggered_task_id = trigger_alert_now(alert)
+            if ok:
+                updated.extend(["last_triggered_at", "next_run_at", "last_task"])
+
+        response = {"alert_id": str(alert.id), "updated_fields": updated}
+        if triggered_task_id:
+            response["triggered_task_id"] = str(triggered_task_id)
+        if trigger_error:
+            response["trigger_error"] = trigger_error
+        return success_api_response(response)
 
     if request.method == 'DELETE':
         alert.delete()

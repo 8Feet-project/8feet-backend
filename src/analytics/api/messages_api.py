@@ -19,6 +19,7 @@ def _serialize_message(item: dict) -> dict:
         "message_id": str(item.get("id")),
         "title": item.get("title") or "",
         "content": item.get("content") or "",
+        "action_url": item.get("action_url") or "",
         "read_status": bool(item.get("is_read")),
         "created_at": item.get("created_at").isoformat() if hasattr(item.get("created_at"), "isoformat") else str(item.get("created_at") or ""),
     }

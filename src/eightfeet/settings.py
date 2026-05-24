@@ -353,6 +353,12 @@ CELERY_TASK_TIME_LIMIT = _to_int(
     _env('CELERY_TASK_TIME_LIMIT', _YAML_CONFIG.get('CeleryTaskTimeLimit', 600)),
     600,
 )
+CELERY_BEAT_SCHEDULE = {
+    'dispatch-due-alerts-every-minute': {
+        'task': 'analytics.tasks.dispatch_due_alerts_task',
+        'schedule': 60.0,
+    },
+}
 
 # ============================================================
 # Minio 对象存储
@@ -412,6 +418,7 @@ EMAIL_USE_TLS = MAIL_SMTP_USE_TLS
 EMAIL_TIMEOUT = MAIL_SMTP_TIMEOUT
 EMAIL_USE_LOCALTIME = MAIL_SMTP_USE_LOCALTIME
 DEFAULT_FROM_EMAIL = MAIL_SMTP_FROM or MAIL_SMTP_USERNAME
+FRONTEND_BASE_URL = _env('FRONTEND_BASE_URL', _YAML_CONFIG.get('FrontendBaseUrl', ''))
 
 # ============================================================
 # 日志（结构化输出 + 按天轮转）

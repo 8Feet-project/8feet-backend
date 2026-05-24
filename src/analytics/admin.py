@@ -33,7 +33,7 @@ class FavoriteAdmin(admin.ModelAdmin):
 
 @admin.register(Alert)
 class AlertAdmin(admin.ModelAdmin):
-    list_display = ['user', 'object_type', 'object_name', 'is_active', 'created_at']
+    list_display = ['user', 'object_type', 'object_name', 'is_active', 'next_run_at', 'last_triggered_at', 'created_at']
     list_filter = ['object_type', 'is_active']
 
 
