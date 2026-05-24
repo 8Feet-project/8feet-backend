@@ -135,14 +135,24 @@ class TaskCancelledError(RuntimeError):
 
 def build_research_system_message() -> str:
     """统一的 research agent system prompt。"""
+    return _build_research_system_message(include_step_approval=True)
+
+
+def build_research_system_message_without_step_approval() -> str:
+    """Research prompt variant for non-interactive background threads."""
+    return _build_research_system_message(include_step_approval=False)
+
+
+def _build_research_system_message(*, include_step_approval: bool) -> str:
     workflow_contract = search_then_research_workflow()
     report_contract = report_format_requirements()
     citation_contract = citation_discipline_requirements()
+    approval_contract = f"\n{step_approval_requirements()}" if include_step_approval else ""
     return (
         "你是 8Feet 商业对象智能调研分析助手。"
         "你的目标是围绕公司、股票、商品三类对象开展深入、可追溯的商业调研。"
         "先拆解调研维度，将并行检索和验证工作通过 task 工具分配给 deep-search 或 researcher 子代理，最后汇总结果产出报告。"
-        f"\n{step_approval_requirements()}"
+        f"{approval_contract}"
         f"\n{workflow_contract}"
         f"\n{report_contract}"
         f"{citation_contract}"

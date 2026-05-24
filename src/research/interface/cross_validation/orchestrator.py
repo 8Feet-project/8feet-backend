@@ -283,7 +283,7 @@ def _run_single_model_thread(
         )
         thread = create_thread(
             _create_model(spec),
-            system_message=research_runtime.build_research_system_message(),
+            system_message=research_runtime.build_research_system_message_without_step_approval(),
             sandbox_paths=sandbox_paths,
             thread_id=thread_id,
         )

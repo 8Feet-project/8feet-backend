@@ -108,7 +108,7 @@ def _mark_model_child_running(
         task_id=child_task_id,
         defaults={
             "thread_id": thread_id,
-            "system_message": research_runtime.build_research_system_message(),
+            "system_message": research_runtime.build_research_system_message_without_step_approval(),
             "status": SESSION_STATUS_RUNNING,
             "latest_user_message": prompt.strip(),
             "last_error": "",
@@ -193,7 +193,7 @@ def _persist_model_child_success(
             task=child_task,
             defaults={
                 "thread_id": thread_id,
-                "system_message": research_runtime.build_research_system_message(),
+                "system_message": research_runtime.build_research_system_message_without_step_approval(),
                 "status": SESSION_STATUS_COMPLETED,
                 "history_messages": serialized_history,
                 "state_snapshot": state_snapshot,
@@ -267,7 +267,7 @@ def _mark_model_child_failed(
         task_id=child_task_id,
         defaults={
             "thread_id": thread_id,
-            "system_message": research_runtime.build_research_system_message(),
+            "system_message": research_runtime.build_research_system_message_without_step_approval(),
             "status": SESSION_STATUS_FAILED,
             "last_error": error,
             "run_count": 1,
