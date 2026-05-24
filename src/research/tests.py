@@ -30,6 +30,7 @@ from research.interface.cross_validation.orchestrator import _integrator_candida
 from research.interface.cross_validation.payloads import _payload_from_result
 from research.interface.cross_validation_runtime import (
     CrossModelSpec,
+    build_cross_validation_base_prompt,
     build_cross_integrator_system_message,
     build_cross_integrator_prompt,
     build_cross_model_research_prompt,
@@ -47,6 +48,7 @@ from research.interface.research_runtime import (
     _record_auto_step_approval,
     build_initial_prompt,
     build_research_system_message,
+    build_research_system_message_without_step_approval,
     build_research_system_message_for_user,
     _build_user_source_requirements,
     _resolve_max_turns,
@@ -283,6 +285,15 @@ class ResearchRuntimeConstraintTests(SimpleTestCase):
             self.assertIn("仅适用于 Lead Agent", text)
             self.assertIn("不要在子代理 prompt 中提及该工具或审批规则", text)
         self.assertIn("当前任务关闭了自动推进", prompt)
+
+    def test_research_system_message_without_step_approval_is_non_interactive(self):
+        system_message = build_research_system_message_without_step_approval()
+
+        self.assertIn("固定自动推进", system_message)
+        self.assertIn("不要调用步骤审批", system_message)
+        self.assertIn("不要委托子代理", system_message)
+        self.assertNotIn("request_step_approval", system_message)
+        self.assertNotIn("task 工具分配", system_message)
 
     def test_research_system_message_includes_user_persona_when_present(self):
         user = SimpleNamespace(is_authenticated=True)
@@ -703,6 +714,24 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertIn("web_search 只用于发现候选网址", prompt)
         self.assertIn("brief_report_path", prompt)
         self.assertIn("present_report", prompt)
+
+    def test_cross_validation_base_prompt_is_non_interactive(self):
+        task = SimpleNamespace(
+            title="交叉验证",
+            object_name="Acme",
+            object_type="COMPANY",
+            search_params={"time_range": "2026"},
+        )
+
+        prompt = build_cross_validation_base_prompt(task)
+
+        self.assertIn("交叉验证固定自动推进", prompt)
+        self.assertIn("独立完成检索", prompt)
+        self.assertIn("不委托子代理", prompt)
+        self.assertIn("对象类型专项调研框架（公司）", prompt)
+        self.assertNotIn("request_step_approval", prompt)
+        self.assertNotIn("task 工具", prompt)
+        self.assertNotIn("子代理分工", prompt)
 
 
 class CrossValidationIntegratorModelTests(TestCase):
@@ -1777,6 +1806,11 @@ class CrossValidationEnqueueTests(SimpleTestCase):
             def first(self):
                 return task
 
+            def update(self, **kwargs):
+                for key, value in kwargs.items():
+                    setattr(task, key, value)
+                return 1
+
         class FakeStepQuery:
             def exists(self):
                 return False
@@ -1813,6 +1847,8 @@ class CrossValidationEnqueueTests(SimpleTestCase):
         self.assertEqual(created_logs[0]["step_status"], "RUNNING")
         self.assertEqual(created_logs[0]["detail"]["status"], "queued")
         self.assertEqual(created_logs[0]["detail"]["model_count"], 2)
+        self.assertTrue(task.search_params["auto_advance"])
+        self.assertTrue(task.search_params["enable_cross_validation"])
         update_progress.assert_called_once()
 
     def test_enqueue_cross_validation_requires_completed_parent_task(self):

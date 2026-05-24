@@ -53,6 +53,7 @@ from .model_specs import (
     resolve_integrator_model_spec,
 )
 from .prompts import (
+    build_cross_validation_base_prompt,
     build_cross_integrator_prompt,
     build_cross_integrator_system_message,
     build_cross_model_research_prompt,
@@ -137,7 +138,8 @@ def enqueue_cross_validation_run(
         return (False, "多模型交叉验证至少需要 2 个模型", None)
 
     run_id = str(uuid4())
-    effective_prompt = (prompt or "").strip() or research_runtime.build_initial_prompt(task)
+    _force_cross_validation_auto_advance(task)
+    effective_prompt = (prompt or "").strip() or build_cross_validation_base_prompt(task)
     metadata = dict(run_metadata or {})
     metadata.update(
         {
@@ -177,6 +179,14 @@ def enqueue_cross_validation_run(
         return (False, f"提交后台交叉验证失败: {exc}", run_id)
 
     return (True, None, run_id)
+
+
+def _force_cross_validation_auto_advance(task: ResearchTask) -> None:
+    params = dict(task.search_params or {})
+    params["auto_advance"] = True
+    params["enable_cross_validation"] = True
+    ResearchTask.objects.filter(pk=task.id).update(search_params=json_safe(params))
+    task.search_params = params
 
 
 def _run_cross_validation(
@@ -286,6 +296,8 @@ def _run_single_model_thread(
             system_message=research_runtime.build_research_system_message_without_step_approval(),
             sandbox_paths=sandbox_paths,
             thread_id=thread_id,
+            include_task=False,
+            include_step_approval=False,
         )
         thread.max_turns = _cross_model_max_turns(task_payload.get("search_params"))
         output_chunks: list[str] = []
@@ -435,6 +447,8 @@ def _run_integrator_thread(
         system_message=build_cross_integrator_system_message(),
         sandbox_paths=sandbox_paths,
         thread_id=thread_id,
+        include_task=False,
+        include_step_approval=False,
     )
     thread.max_turns = _cross_integrator_max_turns(task_payload.get("search_params"))
     output_chunks: list[str] = []

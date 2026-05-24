@@ -88,6 +88,8 @@ def _cross_child_search_params(
     spec: CrossModelSpec,
 ) -> dict[str, Any]:
     params = dict(parent_task.search_params or {})
+    params["auto_advance"] = True
+    params["enable_cross_validation"] = True
     params["cross_validation_child"] = {
         "parent_task_id": parent_task.id,
         "cross_validation_run_id": run_id,
