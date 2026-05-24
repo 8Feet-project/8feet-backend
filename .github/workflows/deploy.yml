@@ -209,7 +209,7 @@ jobs:
           fi
 
           echo "[deploy] pulling backend image ${deploy_image}"
-          BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" pull backend celery-worker
+          BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" pull backend celery-worker celery-beat
 
           echo "[deploy] updating application services"
           BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" up -d --remove-orphans
@@ -226,6 +226,6 @@ jobs:
           done
 
           echo "[deploy] backend did not become ready; recent logs:"
-          BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" logs --tail=200 backend celery-worker
+          BACKEND_IMAGE="${deploy_image}" docker compose "${compose_args[@]}" "${env_file_args[@]}" logs --tail=200 backend celery-worker celery-beat
           exit 1
           REMOTE_DEPLOY

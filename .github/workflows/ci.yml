@@ -105,7 +105,7 @@ jobs:
         run: uv run python src/manage.py check
 
       - name: Run Django tests
-        run: uv run python src/manage.py test research.tests llm_manager.tests -v 2
+        run: uv run python src/manage.py test research.tests llm_manager.tests analytics.tests -v 2
 
   docker-build:
     name: Docker build and publish

@@ -4,6 +4,11 @@ set -euo pipefail
 
 cd /app
 
+if [ "$#" -gt 0 ]; then
+  echo "[entrypoint] running supplied command: $*"
+  exec "$@"
+fi
+
 echo "[entrypoint] running migrate..."
 python src/manage.py migrate --noinput
 
