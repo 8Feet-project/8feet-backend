@@ -27,6 +27,11 @@ class UserProfile(models.Model):
         get_user_model(), on_delete=models.CASCADE,
         related_name='profile', help_text="关联 Django 内置 User"
     )
+    created_by = models.ForeignKey(
+        get_user_model(), on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='managed_user_profiles',
+        help_text="Account manager who created or owns this user"
+    )
     avatar = models.CharField(
         max_length=512, null=True, blank=True,
         help_text="头像 URL (Minio 路径)"

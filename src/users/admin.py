@@ -7,6 +7,7 @@ User = get_user_model()
 
 class UserProfileInline(admin.StackedInline):
     model = UserProfile
+    fk_name = "user"
     can_delete = False
 
 

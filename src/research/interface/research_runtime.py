@@ -410,6 +410,77 @@ def _auto_advance_enabled(search_params: dict[str, Any] | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _research_operation_detail(
+    task: ResearchTask,
+    *,
+    level: str,
+    action_summary: str,
+    user_action: str,
+    search_intent: str = "",
+    model=None,
+    prompt_raw: str = "",
+    response_raw: str = "",
+    error_stack: str = "",
+    agent_trace: list[dict[str, str]] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    llm_config = model or getattr(task, "llm_config", None)
+    detail = {
+        "level": level,
+        "object_type": task.object_type,
+        "model_id": str(getattr(llm_config, "id", "") or getattr(task, "llm_config_id", "") or ""),
+        "model_name": getattr(llm_config, "name", "") or "",
+        "action_summary": action_summary,
+        "user_action": user_action,
+        "search_intent": search_intent or task.title,
+        "prompt_raw": prompt_raw,
+        "response_raw": response_raw,
+        "error_stack": error_stack,
+        "agent_trace": agent_trace or [{"step": "research", "detail": action_summary}],
+    }
+    if extra:
+        detail.update(extra)
+    return detail
+
+
+def _log_research_operation(
+    task: ResearchTask | None,
+    action_type: str,
+    *,
+    level: str = "info",
+    action_summary: str = "",
+    user_action: str = "",
+    search_intent: str = "",
+    model=None,
+    prompt_raw: str = "",
+    response_raw: str = "",
+    error_stack: str = "",
+    agent_trace: list[dict[str, str]] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    if task is None:
+        return
+    OperationLog.objects.create(
+        user=task.user,
+        action_type=action_type,
+        target_module="research.task",
+        target_id=task.id,
+        detail=_research_operation_detail(
+            task,
+            level=level,
+            action_summary=action_summary or action_type,
+            user_action=user_action or action_type,
+            search_intent=search_intent,
+            model=model,
+            prompt_raw=prompt_raw,
+            response_raw=response_raw,
+            error_stack=error_stack,
+            agent_trace=agent_trace,
+            extra=extra,
+        ),
+    )
+
+
 def _approval_response_prompt(response_text: str) -> str:
     return (
         "用户已对上一条关键步骤审批请求作出选择，请把这条选择视为 "
@@ -488,6 +559,18 @@ def enqueue_task_run(
         step_status="RUNNING",
         detail={
             "message": prompt.strip(),
+            "run_number": run_number,
+            "create_report": create_report,
+            "run_metadata": run_metadata or {},
+        },
+    )
+    _log_research_operation(
+        task,
+        "RESEARCH_STARTED" if create_report else "RESEARCH_FOLLOWUP_STARTED",
+        action_summary=f"{queued_step_name}: {task.object_name}",
+        user_action=queued_step_name,
+        prompt_raw=prompt.strip(),
+        extra={
             "run_number": run_number,
             "create_report": create_report,
             "run_metadata": run_metadata or {},
@@ -867,6 +950,19 @@ def _persist_pending_step_approval(
             step_status="PAUSED",
             detail=detail,
             is_interactive=True,
+        )
+        _log_research_operation(
+            task,
+            "RESEARCH_WAITING_APPROVAL",
+            action_summary=f"等待审批：{detail['next_action']}",
+            user_action="等待关键步骤审批",
+            prompt_raw=prompt.strip(),
+            response_raw=_step_approval_content(detail),
+            agent_trace=[{"step": "approval", "detail": detail.get("execution_plan", "")}],
+            extra={
+                "run_number": run_number,
+                "approval_step": detail,
+            },
         )
 
     publish_task_update(

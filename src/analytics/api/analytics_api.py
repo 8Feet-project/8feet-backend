@@ -131,7 +131,7 @@ def dashboard(request: HttpRequest):
 
     [route]: GET /api/analytics/dashboard
     """
-    stats = get_dashboard_stats(*_dashboard_time_range(request))
+    stats = get_dashboard_stats(*_dashboard_time_range(request), user=request.user)
     summary = stats.get("summary", {})
     daily_ops = stats.get("trends", {}).get("daily_active_ops", [])
     return success_api_response({
@@ -151,7 +151,7 @@ def dashboard(request: HttpRequest):
 @require_GET
 @jwt_auth(perms=['analytics.view_dashboard'])
 def object_distribution(request: HttpRequest):
-    stats = get_dashboard_stats(*_dashboard_time_range(request))
+    stats = get_dashboard_stats(*_dashboard_time_range(request), user=request.user)
     distribution = stats.get("type_distribution", [])
     counts = {
         _normalize_object_type(item.get("object_type")): item.get("count", 0)
@@ -170,7 +170,7 @@ def object_distribution(request: HttpRequest):
 @require_GET
 @jwt_auth(perms=['analytics.view_dashboard'])
 def model_usage(request: HttpRequest):
-    stats = get_dashboard_stats(*_dashboard_time_range(request))
+    stats = get_dashboard_stats(*_dashboard_time_range(request), user=request.user)
     ranking = [
         {
             "model_id": str(item.get("llm_config_id") or ""),
@@ -198,7 +198,7 @@ def model_usage(request: HttpRequest):
 @require_GET
 @jwt_auth(perms=['analytics.view_dashboard'])
 def user_activity(request: HttpRequest):
-    stats = get_dashboard_stats(*_dashboard_time_range(request))
+    stats = get_dashboard_stats(*_dashboard_time_range(request), user=request.user)
     daily_ops = stats.get("trends", {}).get("daily_active_ops", [])
     return success_api_response({
         "activity_series": [
@@ -400,7 +400,7 @@ def cost_report(request: HttpRequest):
     start_date = request.GET.get('start_date')
     end_date = request.GET.get('end_date')
     
-    report = get_cost_report(start_date, end_date)
+    report = get_cost_report(start_date, end_date, user=request.user)
     return success_api_response({
         "report": report,
         "period": {"start": start_date, "end": end_date}
