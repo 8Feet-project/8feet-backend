@@ -510,6 +510,27 @@ def assign_model_permissions(
     return (True, None, len(users) + len(roles))
 
 
+def grant_existing_model_permissions_to_user(user) -> int:
+    """Grant a newly created user access to all currently configured models."""
+    if not user or not getattr(user, "id", None):
+        return 0
+
+    granted_count = 0
+    for config_id in LLMConfig.objects.values_list("id", flat=True):
+        _permission, created = ModelPermission.objects.get_or_create(
+            llm_config_id=config_id,
+            user=user,
+            defaults={
+                "is_active": True,
+                "daily_quota": 100,
+                "priority_weight": 1,
+            },
+        )
+        if created:
+            granted_count += 1
+    return granted_count
+
+
 def set_default_summary_model(config_id: int, enabled: bool = True) -> tuple[bool, str | None, dict]:
     """Set or clear the platform default model for summary/integration work."""
     config = LLMConfig.objects.filter(pk=config_id).first()
