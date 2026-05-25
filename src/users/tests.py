@@ -11,7 +11,6 @@ from users.interface.persona_runtime import (
     build_persona_system_message,
     run_persona_turn,
 )
-from llm_manager.models import LLMConfig, ModelPermission
 from users.models.persona import UserPersona
 from users.models.persona import UserPersonaConversation
 from users.models.user_profile import ROLE_SUPER_ADMIN, ROLE_USER, UserProfile
@@ -112,39 +111,6 @@ class UserPersonaRegistrationTests(TestCase):
         self.assertEqual(result["role"], ROLE_USER)
         self.assertTrue(result["should_prompt_persona"])
         self.assertFalse(UserPersona.objects.filter(user__username="regular").exists())
-
-
-class UserModelPermissionProvisioningTests(TestCase):
-    def test_new_profile_grants_all_existing_model_permissions(self):
-        first_model = LLMConfig.objects.create(
-            name="first-model",
-            provider="OpenAI",
-            api_endpoint="https://example.com/v1",
-            api_key_encrypted="secret",
-        )
-        second_model = LLMConfig.objects.create(
-            name="second-model",
-            provider="OpenAI",
-            api_endpoint="https://example.com/v1",
-            api_key_encrypted="secret",
-            is_enabled=False,
-        )
-        user = get_user_model().objects.create_user(
-            username="model-provisioned-user",
-            password="test-pass-123",
-        )
-
-        profile = UserProfile.objects.create(user=user, role=ROLE_USER, nickname="provisioned")
-
-        granted_model_ids = set(
-            ModelPermission.objects.filter(user=user).values_list("llm_config_id", flat=True)
-        )
-        self.assertEqual(granted_model_ids, {first_model.id, second_model.id})
-
-        profile.nickname = "provisioned-updated"
-        profile.save(update_fields=["nickname"])
-
-        self.assertEqual(ModelPermission.objects.filter(user=user).count(), 2)
 
 
 class UserPersonaRuntimeTests(TestCase):

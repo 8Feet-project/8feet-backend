@@ -19,7 +19,3 @@ def sync_user_group_on_profile_save(sender, instance, created, **kwargs):
     - 修改 role: 移除旧 Group，加入新 Group
     """
     assign_user_to_role_group(instance.user, instance.role)
-    if created:
-        from llm_manager.interface.llm_interface import grant_existing_model_permissions_to_user
-
-        grant_existing_model_permissions_to_user(instance.user)
