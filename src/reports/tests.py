@@ -1,4 +1,5 @@
 import jwt
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -345,3 +346,41 @@ class ReportCitationDetailApiTests(TestCase):
             self.assertIn("attachment", download_response.headers["Content-Disposition"])
             body = b"".join(download_response.streaming_content).decode("utf-8")
             self.assertIn("# 测试调研报告", body)
+
+    def test_docx_export_uses_pandoc(self):
+        def fake_run(command, **kwargs):
+            output_path = Path(command[command.index("-o") + 1])
+            output_path.write_bytes(b"docx-content")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(REPORT_EXPORT_ROOT=tmpdir):
+            with patch("reports.interface.export_utils.subprocess.run", side_effect=fake_run) as run_mock:
+                success, message, data = export_report_file(self.report.id, "docx", "full")
+                self.assertTrue(success, message)
+
+                result = run_export_job(int(data["export_id"]))
+
+            self.assertEqual(result["status"], "completed")
+            command = run_mock.call_args.args[0]
+            self.assertEqual(command[0], "pandoc")
+            self.assertIn("-f", command)
+            self.assertIn("gfm", command)
+            self.assertNotIn("--pdf-engine=weasyprint", command)
+
+    def test_pdf_export_uses_pandoc_with_weasyprint(self):
+        def fake_run(command, **kwargs):
+            output_path = Path(command[command.index("-o") + 1])
+            output_path.write_bytes(b"pdf-content")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(REPORT_EXPORT_ROOT=tmpdir):
+            with patch("reports.interface.export_utils.subprocess.run", side_effect=fake_run) as run_mock:
+                success, message, data = export_report_file(self.report.id, "pdf", "full")
+                self.assertTrue(success, message)
+
+                result = run_export_job(int(data["export_id"]))
+
+            self.assertEqual(result["status"], "completed")
+            command = run_mock.call_args.args[0]
+            self.assertEqual(command[0], "pandoc")
+            self.assertIn("--pdf-engine=weasyprint", command)
