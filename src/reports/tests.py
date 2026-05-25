@@ -384,3 +384,25 @@ class ReportCitationDetailApiTests(TestCase):
             command = run_mock.call_args.args[0]
             self.assertEqual(command[0], "pandoc")
             self.assertIn("--pdf-engine=weasyprint", command)
+
+    def test_export_api_runs_job_synchronously(self):
+        def fake_run(command, **kwargs):
+            output_path = Path(command[command.index("-o") + 1])
+            output_path.write_bytes(b"docx-content")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(REPORT_EXPORT_ROOT=tmpdir):
+            with patch("reports.interface.export_utils.subprocess.run", side_effect=fake_run):
+                response = self.client.post(
+                    f"/api/v1/reports/{self.report.id}/export",
+                    data='{"format":"docx","report_mode":"full"}',
+                    content_type="application/json",
+                    secure=True,
+                )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()["data"]
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["format"], "docx")
+            self.assertTrue(payload["download_url"])
+            self.assertTrue(payload["storage_path"])

@@ -20,12 +20,11 @@ from reports.interface.report_interface import (
     get_report_detail, list_reports_by_task,
     list_user_reports, create_followup, list_report_versions,
     export_report_file, get_export_record, trigger_manual_export,
-    append_report_followup,
+    append_report_followup, run_export_job,
 )
 from reports.interface.storage_utils import report_file_path
 from reports.models.citation import Citation, ReportFollowup
 from reports.models.export_record import ReportExportRecord
-from reports.tasks import export_report_task
 
 
 @response_wrapper
@@ -100,8 +99,11 @@ def export_report(request: HttpRequest, report_id: int):
     if not success:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
 
-    export_report_task.delay(int(data['export_id']))
-    return success_api_response(data)
+    try:
+        run_export_job(int(data['export_id']))
+    except Exception as exc:
+        return failed_api_response(ErrorCode.INTERNAL_SERVER_ERROR, str(exc))
+    return success_api_response(get_export_record(int(data['export_id'])) or data)
 
 
 @response_wrapper
@@ -127,8 +129,11 @@ def manual_export_report(request: HttpRequest, report_id: int):
     if not success:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
 
-    export_report_task.delay(int(data['export_id']))
-    return success_api_response(data)
+    try:
+        run_export_job(int(data['export_id']))
+    except Exception as exc:
+        return failed_api_response(ErrorCode.INTERNAL_SERVER_ERROR, str(exc))
+    return success_api_response(get_export_record(int(data['export_id'])) or data)
 
 
 @response_wrapper
