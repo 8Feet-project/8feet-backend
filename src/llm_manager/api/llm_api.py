@@ -13,6 +13,7 @@ from shared.utils import (
     response_wrapper,
     success_api_response,
 )
+from analytics.models.logs import OperationLog
 from llm_manager.interface.llm_interface import (
     assign_model_permissions as assign_model_permissions_service,
     build_routing_recommendation,
@@ -60,7 +61,35 @@ def _to_float(value, default: float) -> float:
         return default
 
 
-def _create_admin_model(data: dict) -> dict:
+def _write_model_operation(
+    user,
+    action_type: str,
+    model_id: int,
+    summary: str,
+    *,
+    level: str = "info",
+    model_name: str = "",
+    extra: dict | None = None,
+) -> None:
+    if user is None:
+        return
+    OperationLog.objects.create(
+        user=user,
+        action_type=action_type,
+        target_module="admin.model",
+        target_id=model_id,
+        detail={
+            "level": level,
+            "model_id": str(model_id),
+            "model_name": model_name,
+            "action_summary": summary,
+            "user_action": summary,
+            **(extra or {}),
+        },
+    )
+
+
+def _create_admin_model(data: dict, user=None) -> dict:
     params = data.get('params', {})
     if isinstance(params, str):
         try:
@@ -93,6 +122,13 @@ def _create_admin_model(data: dict) -> dict:
     connectivity_status = "unknown"
     if ok and test_payload:
         connectivity_status = "connected" if test_payload.get("success") else "failed"
+    _write_model_operation(
+        user,
+        "MODEL_CREATED",
+        config_id,
+        f"新增模型配置：{data.get('name') or data.get('model_name')}",
+        model_name=data.get('name') or data.get('model_name') or "",
+    )
     return success_api_response({
         "model_id": str(config_id),
         "connectivity_status": connectivity_status,
@@ -123,7 +159,7 @@ def _model_list_response(request: HttpRequest) -> dict:
 @jwt_auth(perms=['llm_manager.change_llmconfig'])
 def create_config(request: HttpRequest):
     """创建模型配置；保留函数供内部兼容，公开创建路径为 POST /admin/models。"""
-    return _create_admin_model(_request_data(request))
+    return _create_admin_model(_request_data(request), request.user)
 
 
 @response_wrapper
@@ -134,7 +170,7 @@ def config_collection(request: HttpRequest):
     if request.method == 'POST':
         if not request.user.has_perm('llm_manager.change_llmconfig'):
             return failed_api_response(ErrorCode.REFUSE_ACCESS, "您无权进行此操作")
-        return _create_admin_model(_request_data(request))
+        return _create_admin_model(_request_data(request), request.user)
     if request.method == 'GET':
         if not request.user.has_perm('llm_manager.view_llmconfig'):
             return failed_api_response(ErrorCode.REFUSE_ACCESS, "您无权进行此操作")
@@ -226,6 +262,14 @@ def model_detail_resource(request: HttpRequest, model_id: int):
         success, message, updated_fields = update_llm_config(model_id, data)
         if not success:
             return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, message)
+        _write_model_operation(
+            request.user,
+            "MODEL_UPDATED",
+            model_id,
+            f"更新模型配置：{config.name}",
+            model_name=config.name,
+            extra={"updated_fields": updated_fields},
+        )
         return success_api_response({
             "model_id": str(model_id),
             "updated_fields": updated_fields,
@@ -234,7 +278,16 @@ def model_detail_resource(request: HttpRequest, model_id: int):
     if request.method == 'DELETE':
         if not request.user.has_perm('llm_manager.change_llmconfig'):
             return failed_api_response(ErrorCode.REFUSE_ACCESS, "您无权进行此操作")
+        model_name = config.name
         config.delete()
+        _write_model_operation(
+            request.user,
+            "MODEL_DELETED",
+            model_id,
+            f"删除模型配置：{model_name}",
+            level="warning",
+            model_name=model_name,
+        )
         return success_api_response({"result": "success"})
 
     return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "不支持的请求方法")
@@ -251,12 +304,19 @@ def test_config_connection(request: HttpRequest, model_id: int):
     success, message, payload = test_llm_config_connection(model_id)
     if not success:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, message)
+    _write_model_operation(
+        request.user,
+        "MODEL_CONNECTION_TESTED",
+        model_id,
+        payload.get("message", "模型连接测试") if payload else "模型连接测试",
+        level="info" if payload and payload.get("success") else "error",
+    )
     return success_api_response(payload)
 
 
 @response_wrapper
 @require_POST
-@jwt_auth(perms=['llm_manager.change_modelpermission'])
+@jwt_auth(perms=['llm_manager.change_llmconfig'])
 def assign_model_permissions(request: HttpRequest, model_id: int):
     """为指定用户授予模型使用权限。group_ids 按角色名兼容处理。"""
     data = _request_data(request)

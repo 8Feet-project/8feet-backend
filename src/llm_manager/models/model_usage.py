@@ -20,6 +20,14 @@ class ModelUsage(models.Model):
         LLMConfig, on_delete=models.SET_NULL, null=True,
         related_name='usage_logs'
     )
+    model_name_snapshot = models.CharField(
+        max_length=128, blank=True, default='',
+        help_text="调用发生时的模型名称快照"
+    )
+    provider_snapshot = models.CharField(
+        max_length=64, blank=True, default='',
+        help_text="调用发生时的供应商快照"
+    )
     
     # 调用元数据
     request_id = models.CharField(

@@ -772,6 +772,8 @@ def log_model_usage(
     return ModelUsage.objects.create(
         user=user,
         llm_config=config,
+        model_name_snapshot=config.name or "",
+        provider_snapshot=config.provider or "",
         request_id=request_id or str(uuid4()),
         usage_type=normalize_usage_type(usage_type),
         prompt_tokens=int(prompt_tokens or 0),

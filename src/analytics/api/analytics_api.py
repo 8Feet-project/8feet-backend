@@ -5,6 +5,8 @@
 import json
 
 from django.http import HttpRequest
+from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 from django.views.decorators.http import require_GET, require_POST
 
 from shared.utils import (
@@ -25,6 +27,34 @@ def _request_data(request: HttpRequest) -> dict:
         except (json.JSONDecodeError, TypeError):
             return {}
     return request.POST
+
+
+def _parse_time_param(value: str | None, *, end_of_day: bool = False):
+    if not value:
+        return None
+    text = str(value).strip()
+    is_date_only = "T" not in text and " " not in text
+    parsed = None if is_date_only else parse_datetime(text)
+    if parsed is None:
+        parsed_date = parse_date(text)
+        if parsed_date is None:
+            return None
+        parsed = timezone.datetime.combine(
+            parsed_date,
+            timezone.datetime.max.time() if end_of_day else timezone.datetime.min.time(),
+        )
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
+
+
+def _dashboard_time_range(request: HttpRequest):
+    start_time = _parse_time_param(request.GET.get("start_time") or request.GET.get("start_date"))
+    end_time = _parse_time_param(
+        request.GET.get("end_time") or request.GET.get("end_date"),
+        end_of_day=True,
+    )
+    return start_time, end_time
 
 
 def _normalize_object_type(value: str) -> str:
@@ -101,17 +131,18 @@ def dashboard(request: HttpRequest):
 
     [route]: GET /api/analytics/dashboard
     """
-    stats = get_dashboard_stats()
+    stats = get_dashboard_stats(*_dashboard_time_range(request))
     summary = stats.get("summary", {})
     daily_ops = stats.get("trends", {}).get("daily_active_ops", [])
     return success_api_response({
         "total_research_requests": summary.get("total_research_tasks", 0),
         "dau": daily_ops[-1]["count"] if daily_ops else 0,
-        "mau": sum(item.get("count", 0) for item in daily_ops),
+        "mau": summary.get("active_user_total", 0),
         "active_users_trend": [
             {"date": item["date"].isoformat() if hasattr(item["date"], "isoformat") else str(item["date"]), "value": item.get("count", 0)}
             for item in daily_ops
         ],
+        "operation_log_total": summary.get("operation_log_total", 0),
         "raw": stats,
     })
 
@@ -120,7 +151,7 @@ def dashboard(request: HttpRequest):
 @require_GET
 @jwt_auth(perms=['analytics.view_dashboard'])
 def object_distribution(request: HttpRequest):
-    stats = get_dashboard_stats()
+    stats = get_dashboard_stats(*_dashboard_time_range(request))
     distribution = stats.get("type_distribution", [])
     counts = {
         _normalize_object_type(item.get("object_type")): item.get("count", 0)
@@ -131,6 +162,7 @@ def object_distribution(request: HttpRequest):
         "company_ratio": round(counts.get("company", 0) / total, 4),
         "stock_ratio": round(counts.get("stock", 0) / total, 4),
         "commodity_ratio": round(counts.get("commodity", 0) / total, 4),
+        "total": 0 if not counts else sum(counts.values()),
     })
 
 
@@ -138,12 +170,13 @@ def object_distribution(request: HttpRequest):
 @require_GET
 @jwt_auth(perms=['analytics.view_dashboard'])
 def model_usage(request: HttpRequest):
-    stats = get_dashboard_stats()
+    stats = get_dashboard_stats(*_dashboard_time_range(request))
     ranking = [
         {
             "model_id": str(item.get("llm_config_id") or ""),
-            "model_name": item.get("llm_config__name") or "Unknown",
-            "provider": "",
+            "model_name": item.get("model_name") or "已删除模型",
+            "provider": item.get("provider") or "",
+            "is_deleted": item.get("llm_config_id") is None,
             "call_count": item.get("calls", 0),
         }
         for item in stats.get("llm_usage_ranking", [])
@@ -165,7 +198,7 @@ def model_usage(request: HttpRequest):
 @require_GET
 @jwt_auth(perms=['analytics.view_dashboard'])
 def user_activity(request: HttpRequest):
-    stats = get_dashboard_stats()
+    stats = get_dashboard_stats(*_dashboard_time_range(request))
     daily_ops = stats.get("trends", {}).get("daily_active_ops", [])
     return success_api_response({
         "activity_series": [
@@ -173,7 +206,8 @@ def user_activity(request: HttpRequest):
             for item in daily_ops
         ],
         "retention_summary": [
-            {"label": "近 30 日操作数", "value": str(sum(item.get("count", 0) for item in daily_ops))},
+            {"label": "区间活跃用户", "value": str(stats.get("summary", {}).get("active_user_total", 0))},
+            {"label": "区间操作日志", "value": str(stats.get("summary", {}).get("operation_log_total", 0))},
         ],
     })
 

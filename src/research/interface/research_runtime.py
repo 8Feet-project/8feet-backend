@@ -18,6 +18,8 @@ from django.utils import timezone
 from dotenv import load_dotenv
 from langchain_core.messages import ToolMessage
 
+from analytics.models.logs import OperationLog, SystemLog
+
 try:
     from efeet import (
         SandboxPaths,
@@ -1455,6 +1457,24 @@ def _persist_success(
             },
         )
 
+        OperationLog.objects.create(
+            user=task.user,
+            action_type="RESEARCH_COMPLETED",
+            target_module="research.task",
+            target_id=task.id,
+            detail={
+                "level": "info",
+                "object_type": task.object_type,
+                "model_id": str(llm_config.id) if llm_config else "",
+                "model_name": llm_config.name if llm_config else "",
+                "action_summary": f"调研任务完成：{task.object_name}",
+                "user_action": "完成调研任务",
+                "search_intent": task.title,
+                "response_raw": effective_output[:4000],
+                "agent_trace": [{"step": "research", "detail": "任务执行完成并写入报告"}],
+            },
+        )
+
         log_model_usage(
             task.user,
             llm_config.id if llm_config else None,
@@ -1650,6 +1670,39 @@ def _persist_failure(
             "error": error_message,
             "run_number": run_number,
         },
+    )
+    OperationLog.objects.create(
+        user=task.user,
+        action_type="RESEARCH_FAILED",
+        target_module="research.task",
+        target_id=task.id,
+        detail={
+            "level": "error",
+            "object_type": task.object_type,
+            "model_id": str(task.llm_config_id or ""),
+            "model_name": getattr(task.llm_config, "name", "") if task.llm_config_id else "",
+            "action_summary": f"调研任务失败：{task.object_name}",
+            "user_action": "执行调研任务失败",
+            "search_intent": task.title,
+            "error_stack": error_message,
+            "agent_trace": [{"step": "research", "detail": error_message}],
+        },
+    )
+    SystemLog.objects.create(
+        level="ERROR",
+        module="research.task",
+        message=f"调研任务失败：{task.object_name}",
+        stack_trace=error_message,
+    )
+    log_model_usage(
+        task.user,
+        task.llm_config_id,
+        f"research-{task.id}-{run_number}-failed",
+        prompt_tokens=0,
+        completion_tokens=0,
+        latency_ms=0,
+        usage_type="GENERAL",
+        status_code=500,
     )
 
 

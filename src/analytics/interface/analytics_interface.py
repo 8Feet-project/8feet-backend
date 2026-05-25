@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, F
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 
@@ -29,7 +29,7 @@ def log_operation(user_id: int, action_type: str, target_module: str,
     )
 
 
-def get_dashboard_stats() -> dict:
+def get_dashboard_stats(start_time=None, end_time=None) -> dict:
     """获取综合统计看板数据
 
     FR-SJGL-0003: 多维度数据统计
@@ -46,6 +46,10 @@ def get_dashboard_stats() -> dict:
 
     # 1. 调研任务统计
     primary_tasks = ResearchTask.objects.filter(parent_task__isnull=True)
+    if start_time:
+        primary_tasks = primary_tasks.filter(created_at__gte=start_time)
+    if end_time:
+        primary_tasks = primary_tasks.filter(created_at__lte=end_time)
     total_tasks = primary_tasks.count()
     type_stats = list(
         primary_tasks.values('object_type')
@@ -54,7 +58,13 @@ def get_dashboard_stats() -> dict:
     )
 
     # 2. 模型使用及成本统计 (基于 ModelUsage)
-    llm_summary = ModelUsage.objects.aggregate(
+    usage_query = ModelUsage.objects.all()
+    if start_time:
+        usage_query = usage_query.filter(created_at__gte=start_time)
+    if end_time:
+        usage_query = usage_query.filter(created_at__lte=end_time)
+
+    llm_summary = usage_query.aggregate(
         total_tokens=Sum('total_tokens'),
         total_cost=Sum('cost'),
         avg_latency=Avg('latency_ms')
@@ -62,18 +72,22 @@ def get_dashboard_stats() -> dict:
 
     # 模型调用排行 (按 Token 消耗)
     llm_usage_ranking = list(
-        ModelUsage.objects.values('llm_config_id', 'llm_config__name')
+        usage_query.annotate(
+            model_name=F('model_name_snapshot'),
+            provider=F('provider_snapshot'),
+        )
+        .values('llm_config_id', 'model_name', 'provider')
         .annotate(
             tokens=Sum('total_tokens'),
             cost=Sum('cost'),
             calls=Count('id')
         )
-        .order_by('-tokens')[:10]
+        .order_by('-calls', '-tokens')[:10]
     )
 
     # 3. 趋势统计 (近 30 天)
     daily_stats = list(
-        ModelUsage.objects.filter(created_at__gte=thirty_days_ago)
+        (usage_query if (start_time or end_time) else usage_query.filter(created_at__gte=thirty_days_ago))
         .annotate(date=TruncDate('created_at'))
         .values('date')
         .annotate(
@@ -85,11 +99,21 @@ def get_dashboard_stats() -> dict:
     )
 
     # 4. 用户活跃度
+    operation_query = OperationLog.objects.all()
+    if start_time:
+        operation_query = operation_query.filter(created_at__gte=start_time)
+    if end_time:
+        operation_query = operation_query.filter(created_at__lte=end_time)
+    if not start_time and not end_time:
+        operation_query = operation_query.filter(created_at__gte=thirty_days_ago)
+    operation_log_total = operation_query.count()
+    active_user_total = operation_query.exclude(user_id__isnull=True).values('user_id').distinct().count()
+
     user_activity = list(
-        OperationLog.objects.filter(created_at__gte=thirty_days_ago)
+        operation_query
         .annotate(date=TruncDate('created_at'))
         .values('date')
-        .annotate(count=Count('id'))
+        .annotate(count=Count('user_id', distinct=True))
         .order_by('date')
     )
 
@@ -98,7 +122,9 @@ def get_dashboard_stats() -> dict:
             "total_research_tasks": total_tasks,
             "total_tokens_consumed": llm_summary['total_tokens'] or 0,
             "total_cost_yuan": float(llm_summary['total_cost'] or 0),
-            "avg_latency_ms": round(llm_summary['avg_latency'] or 0, 2)
+            "avg_latency_ms": round(llm_summary['avg_latency'] or 0, 2),
+            "operation_log_total": operation_log_total,
+            "active_user_total": active_user_total,
         },
         "type_distribution": type_stats,
         "llm_usage_ranking": llm_usage_ranking,
