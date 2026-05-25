@@ -18,6 +18,7 @@ from analytics.models.logs import OperationLog, SystemLog
 from llm_manager.models.model_usage import ModelUsage
 from research.models import TaskStepLog
 from shared.utils import ErrorCode, failed_api_response, jwt_auth, response_wrapper, success_api_response
+from users.scope import apply_user_scope, is_super_admin
 
 EXPORT_ROOT = "admin_logs"
 EXPORT_STATUS_CACHE: dict[str, dict] = {}
@@ -184,7 +185,7 @@ def _serialize_task_step_log(log: TaskStepLog) -> dict:
     }
 
 
-def _combined_logs(params: dict | None = None) -> list[dict]:
+def _combined_logs(params: dict | None = None, user=None) -> list[dict]:
     params = params or {}
     start_time = _parse_datetime(params.get("start_time"))
     end_time = _parse_datetime(params.get("end_time"))
@@ -194,14 +195,16 @@ def _combined_logs(params: dict | None = None) -> list[dict]:
     modules = set(_split_param(params.get("module")))
     object_types = {_normalize_object_type(item) for item in _split_param(params.get("object_type"))}
 
-    operation_query = OperationLog.objects.select_related("user").all()
-    system_query = SystemLog.objects.all()
-    usage_query = ModelUsage.objects.select_related("user", "llm_config").all()
+    operation_query = apply_user_scope(OperationLog.objects.select_related("user").all(), user)
+    system_query = SystemLog.objects.all() if is_super_admin(user) else SystemLog.objects.none()
+    usage_query = apply_user_scope(ModelUsage.objects.select_related("user", "llm_config").all(), user)
     task_step_query = (
         TaskStepLog.objects
         .select_related("task", "task__user", "task__llm_config")
         .filter(step_status__in=("FAILED", "COMPLETED"), step_name__in=("调研失败", "调研完成"))
     )
+    task_step_query = apply_user_scope(task_step_query, user, "task__user_id")
+
     if start_time:
         operation_query = operation_query.filter(created_at__gte=start_time)
         system_query = system_query.filter(created_at__gte=start_time)
@@ -250,7 +253,7 @@ def _paginate(items: list[dict], request: HttpRequest) -> tuple[list[dict], int,
 @response_wrapper
 @jwt_auth(perms=['analytics.view_audit_log'])
 def log_list(request):
-    logs = _combined_logs(request.GET)
+    logs = _combined_logs(request.GET, request.user)
     page_items, page, page_size = _paginate(logs, request)
     return success_api_response({
         "list": page_items,
@@ -265,7 +268,10 @@ def log_list(request):
 def log_detail(request, log_id: str):
     if log_id.startswith("op-"):
         raw_id = log_id.removeprefix("op-")
-        log = OperationLog.objects.filter(pk=raw_id).select_related("user").first()
+        log = apply_user_scope(
+            OperationLog.objects.filter(pk=raw_id).select_related("user"),
+            request.user,
+        ).first()
         if not log:
             return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "日志不存在")
 
@@ -287,7 +293,10 @@ def log_detail(request, log_id: str):
 
     if log_id.startswith("usage-"):
         raw_id = log_id.removeprefix("usage-")
-        log = ModelUsage.objects.filter(pk=raw_id).select_related("user", "llm_config").first()
+        log = apply_user_scope(
+            ModelUsage.objects.filter(pk=raw_id).select_related("user", "llm_config"),
+            request.user,
+        ).first()
         if not log:
             return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "log not found")
         model_name = _model_usage_name(log)
@@ -307,9 +316,11 @@ def log_detail(request, log_id: str):
     if log_id.startswith("taskstep-"):
         raw_id = log_id.removeprefix("taskstep-")
         log = (
-            TaskStepLog.objects
-            .filter(pk=raw_id)
-            .select_related("task", "task__user", "task__llm_config")
+            apply_user_scope(
+                TaskStepLog.objects.filter(pk=raw_id).select_related("task", "task__user", "task__llm_config"),
+                request.user,
+                "task__user_id",
+            )
             .first()
         )
         if not log:
@@ -330,6 +341,8 @@ def log_detail(request, log_id: str):
         })
 
     raw_id = log_id.removeprefix("sys-")
+    if not is_super_admin(request.user):
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "log not found")
     log = SystemLog.objects.filter(pk=raw_id).first()
     if not log:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "日志不存在")
@@ -399,7 +412,7 @@ def log_export(request):
     if data.get("format", "csv") not in ("csv", "", None):
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "日志导出仅支持 csv 格式")
 
-    logs = _combined_logs(data)
+    logs = _combined_logs(data, request.user)
     export_id = f"logs-{timezone.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
     _write_csv(export_id, logs)
     download_url = f"/api/v1/admin/logs/export/{export_id}/download"

@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from analytics.models.logs import OperationLog, LLMCallLog
 from analytics.models.personalization import Favorite, Alert
+from users.scope import apply_user_scope
 
 
 def log_operation(user_id: int, action_type: str, target_module: str,
@@ -29,7 +30,7 @@ def log_operation(user_id: int, action_type: str, target_module: str,
     )
 
 
-def get_dashboard_stats(start_time=None, end_time=None) -> dict:
+def get_dashboard_stats(start_time=None, end_time=None, user=None) -> dict:
     """获取综合统计看板数据
 
     FR-SJGL-0003: 多维度数据统计
@@ -45,7 +46,10 @@ def get_dashboard_stats(start_time=None, end_time=None) -> dict:
     thirty_days_ago = now - timedelta(days=30)
 
     # 1. 调研任务统计
-    primary_tasks = ResearchTask.objects.filter(parent_task__isnull=True)
+    primary_tasks = apply_user_scope(
+        ResearchTask.objects.filter(parent_task__isnull=True),
+        user,
+    )
     if start_time:
         primary_tasks = primary_tasks.filter(created_at__gte=start_time)
     if end_time:
@@ -58,7 +62,7 @@ def get_dashboard_stats(start_time=None, end_time=None) -> dict:
     )
 
     # 2. 模型使用及成本统计 (基于 ModelUsage)
-    usage_query = ModelUsage.objects.all()
+    usage_query = apply_user_scope(ModelUsage.objects.all(), user)
     if start_time:
         usage_query = usage_query.filter(created_at__gte=start_time)
     if end_time:
@@ -99,7 +103,7 @@ def get_dashboard_stats(start_time=None, end_time=None) -> dict:
     )
 
     # 4. 用户活跃度
-    operation_query = OperationLog.objects.all()
+    operation_query = apply_user_scope(OperationLog.objects.all(), user)
     if start_time:
         operation_query = operation_query.filter(created_at__gte=start_time)
     if end_time:
@@ -497,7 +501,7 @@ def list_alerts(user_id: int) -> List[dict]:
     ))
 
 
-def get_cost_report(start_date: str = None, end_date: str = None) -> List[dict]:
+def get_cost_report(start_date: str = None, end_date: str = None, user=None) -> List[dict]:
     """获取成本审计报表 (按用户维度)
     
     FR-SJGL-0005: 成本审计 (Token 消耗流水、分用户成本报表)
@@ -505,7 +509,7 @@ def get_cost_report(start_date: str = None, end_date: str = None) -> List[dict]:
     from django.db.models import Sum, Count
     from llm_manager.models.model_usage import ModelUsage
 
-    query = ModelUsage.objects.all()
+    query = apply_user_scope(ModelUsage.objects.all(), user)
     if start_date:
         query = query.filter(created_at__date__gte=start_date)
     if end_date:

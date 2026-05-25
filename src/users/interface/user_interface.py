@@ -50,6 +50,7 @@ def _serialize_user(user) -> Dict:
         "is_active": user.is_active,
         "is_staff": user.is_staff,
         "permissions": product_permissions,
+        "created_by_user_id": profile.created_by_id if profile else None,
         "created_at": user.date_joined.isoformat() if user.date_joined else None,
         "last_login_at": user.last_login.isoformat() if user.last_login else None,
     }
@@ -134,6 +135,7 @@ def create_user_account(
     role: str = ROLE_USER,
     phone: str = None,
     permissions: List[str] = None,
+    created_by=None,
 ) -> Tuple[bool, str, Optional[str]]:
     """创建用户账户并分配角色。"""
     username = (username or "").strip()
@@ -165,6 +167,7 @@ def create_user_account(
                 role=role,
                 phone=phone,
                 nickname=username,
+                created_by=created_by,
             )
             if permissions is not None:
                 user.user_permissions.set(permission_objects)
@@ -216,6 +219,7 @@ def create_user_account_for_operator(
         role=role,
         phone=phone,
         permissions=permissions,
+        created_by=operator,
     )
 
 

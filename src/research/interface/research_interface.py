@@ -12,6 +12,7 @@ from uuid import uuid4
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
+from analytics.models.logs import OperationLog
 from llm_manager.interface.llm_interface import (
     normalize_object_type,
     resolve_user_model_config,
@@ -81,6 +82,45 @@ STOCK_KEYWORDS = {
     "年报",
     "季报",
 }
+
+
+def _log_task_operation(task: ResearchTask, action_type: str, *, level: str = "info",
+                        summary: str = "", user_action: str = "", prompt_raw: str = "",
+                        response_raw: str = "", error_stack: str = "", extra: dict = None) -> None:
+    llm_config = getattr(task, "llm_config", None)
+    detail = {
+        "level": level,
+        "object_type": task.object_type,
+        "model_id": str(getattr(llm_config, "id", "") or getattr(task, "llm_config_id", "") or ""),
+        "model_name": getattr(llm_config, "name", "") or "",
+        "action_summary": summary or action_type,
+        "user_action": user_action or action_type,
+        "search_intent": task.title,
+        "prompt_raw": prompt_raw,
+        "response_raw": response_raw,
+        "error_stack": error_stack,
+        "agent_trace": [{"step": "research", "detail": summary or action_type}],
+    }
+    if extra:
+        detail.update(extra)
+    OperationLog.objects.create(
+        user=task.user,
+        action_type=action_type,
+        target_module="research.task",
+        target_id=task.id,
+        detail=detail,
+    )
+
+
+def _log_task_failure(task: ResearchTask, message: str, *, user_action: str = "执行调研任务失败") -> None:
+    _log_task_operation(
+        task,
+        "RESEARCH_FAILED",
+        level="error",
+        summary=f"调研任务失败：{task.object_name}",
+        user_action=user_action,
+        error_stack=message or "未知错误",
+    )
 
 
 def _fallback_system_message() -> str:
@@ -198,6 +238,14 @@ def create_research_task(
         detail={"message": f"调研任务 [{title}] 创建成功，准备启动调研链路"},
     )
 
+    _log_task_operation(
+        task,
+        "TASK_CREATED",
+        summary=f"调研任务创建：{task.object_name}",
+        user_action="创建调研任务",
+        prompt_raw=str(search_params or {}),
+    )
+
     if runtime is None:
         TaskStepLog.objects.create(
             task=task,
@@ -235,6 +283,7 @@ def create_research_task(
             step_status="FAILED",
             detail={"error": message or "未知错误"},
         )
+        _log_task_failure(task, message or "未知错误", user_action="启动调研任务失败")
         return (False, message, None)
 
     return (True, None, task.id)
@@ -436,6 +485,19 @@ def respond_to_step(
     step.step_status = 'COMPLETED'
     step.save(update_fields=['user_response', 'step_status'])
 
+    _log_task_operation(
+        task,
+        "RESEARCH_APPROVAL_RESPONDED",
+        summary=f"继续审批：{task.object_name}",
+        user_action="提交关键步骤审批反馈",
+        prompt_raw=action_text,
+        extra={
+            "approval_step_id": step.id,
+            "approval_action": action,
+            "approval_response": response_data or {},
+        },
+    )
+
     if action == 'CANCEL':
         task.status = STATUS_CANCELLED
         task.save(update_fields=['status', 'updated_at'])
@@ -470,6 +532,7 @@ def respond_to_step(
         if not success:
             task.status = STATUS_WAITING_USER
             task.save(update_fields=['status', 'updated_at'])
+            _log_task_failure(task, error_message or "恢复调研失败", user_action="审批后恢复调研失败")
             return (False, error_message or "恢复调研失败")
 
     return (True, None)
