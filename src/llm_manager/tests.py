@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 
 from llm_manager.interface.llm_interface import (
@@ -7,9 +8,10 @@ from llm_manager.interface.llm_interface import (
     get_provider_runtime_config,
     normalize_provider_base_url,
     serialize_admin_model_item,
+    serialize_model_permission_options,
     set_default_summary_model,
 )
-from llm_manager.models import LLMConfig, ModelObjectMapping
+from llm_manager.models import LLMConfig, ModelObjectMapping, ModelPermission
 from llm_manager.models.model_permission import USAGE_TYPE_SUMMARIZE
 
 
@@ -102,6 +104,45 @@ class DefaultSummaryModelTests(TestCase):
         serialized = serialize_admin_model_item(selected)
         self.assertTrue(serialized["is_default_summary_model"])
         self.assertIn("COMPANY", serialized["default_summary_object_types"])
+
+
+class AdminModelPermissionSerializationTests(TestCase):
+    def test_admin_model_item_includes_permission_subject_details(self):
+        user = get_user_model().objects.create_user(
+            username="authorized-user",
+            email="authorized@example.com",
+            password="test-pass-123",
+        )
+        config = LLMConfig.objects.create(
+            name="permission-model",
+            provider="OpenAI",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="secret",
+        )
+        ModelPermission.objects.create(llm_config=config, user=user, is_active=True)
+        ModelPermission.objects.create(llm_config=config, role="admin", is_active=True)
+
+        serialized = serialize_admin_model_item(config)
+
+        self.assertEqual(serialized["permission_user_ids"], [user.id])
+        self.assertEqual(serialized["permission_users"][0]["username"], "authorized-user")
+        self.assertEqual(serialized["permission_group_ids"], ["group-admin"])
+        self.assertEqual(serialized["permission_groups"][0]["label"], "管理员")
+        self.assertIn("authorized-user", serialized["granted_scope_summary"])
+        self.assertIn("管理员", serialized["granted_scope_summary"])
+
+    def test_permission_options_include_users_and_supported_groups(self):
+        user = get_user_model().objects.create_user(
+            username="option-user",
+            email="option@example.com",
+            password="test-pass-123",
+        )
+
+        options = serialize_model_permission_options()
+
+        self.assertIn(user.id, [item["user_id"] for item in options["users"]])
+        self.assertIn("group-admin", [item["group_id"] for item in options["groups"]])
+        self.assertIn("group-user", [item["group_id"] for item in options["groups"]])
 
 
 class ProviderRuntimeConfigTests(SimpleTestCase):

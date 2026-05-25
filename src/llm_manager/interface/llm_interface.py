@@ -24,6 +24,12 @@ from llm_manager.models.model_permission import (
 from llm_manager.models.model_usage import ModelUsage
 
 
+MODEL_PERMISSION_GROUP_OPTIONS = [
+    {"group_id": "group-super-admin", "role": "super_admin", "label": "超级管理员"},
+    {"group_id": "group-admin", "role": "admin", "label": "管理员"},
+    {"group_id": "group-user", "role": "user", "label": "普通用户"},
+]
+
 OBJECT_TYPE_ALIASES = {
     "company": OBJECT_TYPE_COMPANY,
     "stock": OBJECT_TYPE_STOCK,
@@ -331,6 +337,7 @@ def serialize_model_available(config: LLMConfig) -> dict:
 
 def serialize_model_detail(config: LLMConfig) -> dict:
     params = config.params or {}
+    permission_detail = _model_permission_detail(config)
     return {
         "id": config.id,
         "model_id": str(config.id),
@@ -352,6 +359,10 @@ def serialize_model_detail(config: LLMConfig) -> dict:
         "is_online": config.is_online,
         "connectivity_status": _connectivity_status(config),
         "granted_scope_summary": _grant_scope_summary(config),
+        "permission_users": permission_detail["users"],
+        "permission_groups": permission_detail["groups"],
+        "permission_user_ids": permission_detail["user_ids"],
+        "permission_group_ids": permission_detail["group_ids"],
         "description": config.description,
         "created_at": config.created_at.isoformat() if config.created_at else None,
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
@@ -365,26 +376,30 @@ def _connectivity_status(config: LLMConfig) -> str:
 
 
 def _grant_scope_summary(config: LLMConfig) -> str:
-    active = config.user_permissions.filter(is_active=True)
-    user_count = active.filter(user__isnull=False).count()
-    roles = list(
-        active.filter(role__isnull=False)
-        .exclude(role="")
-        .values_list("role", flat=True)
-        .distinct()
-    )
-    if not user_count and not roles:
+    detail = _model_permission_detail(config)
+    users = detail["users"]
+    groups = detail["groups"]
+    if not users and not groups:
         return "未分配"
+
     parts = []
-    if user_count:
-        parts.append(f"{user_count} 个用户")
-    if roles:
-        parts.append(f"{len(roles)} 个用户组")
-    return "、".join(parts)
+    if users:
+        names = [item["nickname"] or item["username"] for item in users]
+        parts.append(f"用户：{_compact_names(names)}")
+    if groups:
+        parts.append(f"用户组：{_compact_names([item['label'] for item in groups])}")
+    return "；".join(parts)
+
+
+def _compact_names(names: list[str], max_items: int = 4) -> str:
+    visible = names[:max_items]
+    suffix = f" 等 {len(names)} 个" if len(names) > max_items else ""
+    return "、".join(visible) + suffix
 
 
 def serialize_admin_model_item(config: LLMConfig) -> dict:
     params = config.params or {}
+    permission_detail = _model_permission_detail(config)
     summarize_defaults = list(
         config.object_mappings
         .filter(usage_type=USAGE_TYPE_SUMMARIZE, is_default=True)
@@ -401,6 +416,10 @@ def serialize_admin_model_item(config: LLMConfig) -> dict:
         "connectivity_status": _connectivity_status(config),
         "updated_at": config.updated_at.isoformat() if config.updated_at else "",
         "granted_scope_summary": _grant_scope_summary(config),
+        "permission_users": permission_detail["users"],
+        "permission_groups": permission_detail["groups"],
+        "permission_user_ids": permission_detail["user_ids"],
+        "permission_group_ids": permission_detail["group_ids"],
         "default_summary_object_types": summarize_defaults,
         "is_default_summary_model": bool(summarize_defaults),
     }
@@ -443,15 +462,28 @@ def test_llm_config_connection(config_id: int) -> tuple[bool, str | None, dict |
 GROUP_ROLE_ALIASES = {
     "group-admin": "admin",
     "admin": "admin",
+    "ADMIN": "admin",
     "admin_group": "admin",
     "group-user": "user",
     "user": "user",
+    "USER": "user",
+    "NORMAL": "user",
     "user_group": "user",
     "group-research": "user",
     "research": "user",
     "group-super-admin": "super_admin",
     "super_admin": "super_admin",
+    "SUPER_ADMIN": "super_admin",
     "super_admin_group": "super_admin",
+}
+
+ROLE_TO_GROUP_ID = {
+    item["role"]: item["group_id"]
+    for item in MODEL_PERMISSION_GROUP_OPTIONS
+}
+ROLE_LABELS = {
+    item["role"]: item["label"]
+    for item in MODEL_PERMISSION_GROUP_OPTIONS
 }
 
 
@@ -463,6 +495,71 @@ def _resolve_user_id(raw: Any):
         return int(text)
     suffix = text.rsplit("-", 1)[-1]
     return int(suffix) if suffix.isdigit() else None
+
+
+def _serialize_permission_user(user) -> dict:
+    profile = getattr(user, "profile", None)
+    nickname = getattr(profile, "nickname", "") or user.get_full_name() or user.username
+    return {
+        "user_id": int(user.id),
+        "username": user.username,
+        "nickname": nickname,
+        "email": user.email or "",
+    }
+
+
+def _serialize_permission_group(role: str) -> dict:
+    raw_role = str(role or "").strip()
+    normalized_role = GROUP_ROLE_ALIASES.get(raw_role, GROUP_ROLE_ALIASES.get(raw_role.lower(), raw_role))
+    return {
+        "group_id": ROLE_TO_GROUP_ID.get(normalized_role, normalized_role),
+        "role": normalized_role,
+        "label": ROLE_LABELS.get(normalized_role, normalized_role),
+    }
+
+
+def _model_permission_detail(config: LLMConfig) -> dict:
+    active = (
+        config.user_permissions
+        .filter(is_active=True)
+        .select_related("user", "user__profile")
+        .order_by("user_id", "role")
+    )
+    users = []
+    groups = []
+    seen_user_ids = set()
+    seen_group_ids = set()
+
+    for row in active:
+        if row.user_id and row.user_id not in seen_user_ids:
+            users.append(_serialize_permission_user(row.user))
+            seen_user_ids.add(row.user_id)
+        elif row.role:
+            group = _serialize_permission_group(row.role)
+            if group["group_id"] not in seen_group_ids:
+                groups.append(group)
+                seen_group_ids.add(group["group_id"])
+
+    return {
+        "users": users,
+        "groups": groups,
+        "user_ids": [item["user_id"] for item in users],
+        "group_ids": [item["group_id"] for item in groups],
+    }
+
+
+def serialize_model_permission_options() -> dict:
+    """Return all subjects that can be selected in the model permission UI."""
+    User = get_user_model()
+    users = (
+        User.objects
+        .select_related("profile")
+        .order_by("id")
+    )
+    return {
+        "users": [_serialize_permission_user(user) for user in users],
+        "groups": [dict(item) for item in MODEL_PERMISSION_GROUP_OPTIONS],
+    }
 
 
 def assign_model_permissions(

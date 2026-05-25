@@ -20,6 +20,7 @@ from llm_manager.interface.llm_interface import (
     create_or_update_llm_config,
     list_available_models,
     list_llm_configs,
+    serialize_model_permission_options,
     serialize_model_available,
     serialize_model_detail,
     set_default_summary_model,
@@ -137,6 +138,7 @@ def _create_admin_model(data: dict, user=None) -> dict:
 
 def _model_list_response(request: HttpRequest) -> dict:
     configs = list_llm_configs()
+    permission_options = serialize_model_permission_options()
     total = len(configs)
     page = request.GET.get("page")
     page_size = request.GET.get("page_size")
@@ -150,8 +152,13 @@ def _model_list_response(request: HttpRequest) -> dict:
             "total": total,
             "page": safe_page,
             "page_size": safe_page_size,
+            "permission_options": permission_options,
         })
-    return success_api_response({"list": configs, "total": total})
+    return success_api_response({
+        "list": configs,
+        "total": total,
+        "permission_options": permission_options,
+    })
 
 
 @response_wrapper
