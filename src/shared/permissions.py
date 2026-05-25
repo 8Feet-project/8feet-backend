@@ -47,6 +47,7 @@ ROLE_PERMISSIONS = {
         # 基础业务权限
         'research.create_research',
         'research.view_research',
+        'research.cancel_research',
         'reports.view_report',
         'reports.followup_report',
         'analytics.add_favorite',
@@ -56,6 +57,7 @@ ROLE_PERMISSIONS = {
         # 仅基础业务权限
         'research.create_research',
         'research.view_research',
+        'research.cancel_research',
         'reports.view_report',
         'reports.followup_report',
         'analytics.add_favorite',
