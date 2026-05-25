@@ -58,6 +58,7 @@ class AdminLogPermissionTests(TestCase):
             codename="view_audit_log",
         )
         user.user_permissions.add(view_log_permission)
+        UserProfile.objects.create(user=user, role=ROLE_SUPER_ADMIN)
         SystemLog.objects.create(
             level="INFO",
             module="permissions",
