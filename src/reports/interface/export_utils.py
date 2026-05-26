@@ -97,11 +97,12 @@ def build_markdown_document(
         for index, item in enumerate(citations):
             number = item["index_number"] if item["index_number"] > 0 else index + 1
             key = f" @{item['cite_key']}" if item["cite_key"] else ""
+            anchor = f"<span id=\"{_citation_anchor_id(number)}\"></span>" if render_citation_marks else ""
             source = (
                 f"[{item['source_title']}]({item['source_url']})"
                 if item["source_url"] else item["source_title"]
             )
-            parts.append(f"{number}. {source}{key}")
+            parts.append(f"{number}. {anchor}{source}{key}")
 
             source_meta = [item["source_platform"], item["source_type"]]
             source_meta = [value for value in source_meta if value]
@@ -398,6 +399,14 @@ def _compact_citation_numbers(numbers: list[int]) -> str:
     return ",".join(ranges)
 
 
+def _citation_anchor_id(number: int) -> str:
+    return f"reference-{number}"
+
+
+def _citation_superscript_link(label: str, target_number: int) -> str:
+    return f"<sup><a href=\"#{_citation_anchor_id(target_number)}\">[{label}]</a></sup>"
+
+
 def _render_citation_marks_as_superscript(markdown_text: str, citations: list[dict[str, Any]]) -> str:
     by_key = {
         _normalize_cite_key(citation.get("cite_key")): _citation_number(citation, index)
@@ -413,14 +422,17 @@ def _render_citation_marks_as_superscript(markdown_text: str, citations: list[di
         known_numbers = [number for number in numbers if number is not None]
 
         if known_numbers and len(known_numbers) == len(cite_keys):
-            return f"<sup>[{_compact_citation_numbers(known_numbers)}]</sup>"
+            return _citation_superscript_link(
+                _compact_citation_numbers(known_numbers),
+                min(known_numbers),
+            )
 
         rendered_parts = []
         for cite_key, number in zip(cite_keys, numbers):
             if number is None:
                 rendered_parts.append(f"[@{cite_key}]")
             else:
-                rendered_parts.append(f"<sup>[{number}]</sup>")
+                rendered_parts.append(_citation_superscript_link(str(number), number))
         return "".join(rendered_parts)
 
     return CITE_MARK_GROUP_RE.sub(replace_group, markdown_text or "")

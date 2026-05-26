@@ -416,9 +416,18 @@ class ReportCitationDetailApiTests(TestCase):
             source_path = Path(command[1])
             conversion_markdown = source_path.read_text(encoding="utf-8")
             self.assertNotEqual(conversion_markdown, exported_markdown_text)
-            self.assertIn("组合引用<sup>[1-2]</sup>，未知引用[@MISSING]。", conversion_markdown)
-            self.assertIn(f"1. [{self.citation.source_title}]({self.citation.source_url}) @example_source", conversion_markdown)
-            self.assertIn("2. [第二来源](https://example.com/second-source) @second_source", conversion_markdown)
+            self.assertIn(
+                "组合引用<sup><a href=\"#reference-1\">[1-2]</a></sup>，未知引用[@MISSING]。",
+                conversion_markdown,
+            )
+            self.assertIn(
+                f"1. <span id=\"reference-1\"></span>[{self.citation.source_title}]({self.citation.source_url}) @example_source",
+                conversion_markdown,
+            )
+            self.assertIn(
+                "2. <span id=\"reference-2\"></span>[第二来源](https://example.com/second-source) @second_source",
+                conversion_markdown,
+            )
             output_path = Path(command[command.index("-o") + 1])
             output_path.write_bytes(b"docx-content")
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -459,9 +468,18 @@ class ReportCitationDetailApiTests(TestCase):
             source_path = Path(command[1])
             conversion_markdown = source_path.read_text(encoding="utf-8")
             self.assertNotEqual(conversion_markdown, exported_markdown_text)
-            self.assertIn("组合引用<sup>[1-2]</sup>，未知引用[@MISSING]。", conversion_markdown)
-            self.assertIn(f"1. [{self.citation.source_title}]({self.citation.source_url}) @example_source", conversion_markdown)
-            self.assertIn("2. [第二来源](https://example.com/second-source) @second_source", conversion_markdown)
+            self.assertIn(
+                "组合引用<sup><a href=\"#reference-1\">[1-2]</a></sup>，未知引用[@MISSING]。",
+                conversion_markdown,
+            )
+            self.assertIn(
+                f"1. <span id=\"reference-1\"></span>[{self.citation.source_title}]({self.citation.source_url}) @example_source",
+                conversion_markdown,
+            )
+            self.assertIn(
+                "2. <span id=\"reference-2\"></span>[第二来源](https://example.com/second-source) @second_source",
+                conversion_markdown,
+            )
             output_path = Path(command[command.index("-o") + 1])
             output_path.write_bytes(b"pdf-content")
             return subprocess.CompletedProcess(command, 0, "", "")
