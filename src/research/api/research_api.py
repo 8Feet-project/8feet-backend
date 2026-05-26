@@ -1314,22 +1314,6 @@ def research_history_detail(request: HttpRequest, task_id: int):
         "created_at": task.created_at.isoformat(),
     })
 
-
-@response_wrapper
-@require_POST
-@jwt_auth(perms=['research.view_research'])
-def research_history_reload(request: HttpRequest, task_id: int):
-    task = _get_user_task(task_id, request.user.id)
-    if not task:
-        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
-    report = task.reports.filter(is_latest=True).first()
-    return success_api_response({
-        "task_id": str(task.id),
-        "report_id": str(report.id) if report else None,
-        "redirect_url": f"/research/tasks/{task.id}",
-    })
-
-
 @response_wrapper
 @require_POST
 @jwt_auth(perms=['research.cancel_research'])
