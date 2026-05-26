@@ -454,6 +454,11 @@ class ReportCitationDetailApiTests(TestCase):
             command = run_mock.call_args.args[0]
             self.assertEqual(command[0], "pandoc")
             self.assertIn("--pdf-engine=weasyprint", command)
+            self.assertIn("--css", command)
+            css_path = Path(command[command.index("--css") + 1])
+            css_text = css_path.read_text(encoding="utf-8")
+            self.assertIn("size: A4", css_text)
+            self.assertIn("table-layout: fixed", css_text)
 
     def test_export_api_runs_job_synchronously(self):
         def fake_run(command, **kwargs):

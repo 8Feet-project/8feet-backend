@@ -196,7 +196,8 @@ def _convert_markdown_with_pandoc(markdown_text: str, output_path: Path, output_
         str(output_path),
     ]
     if output_format == "pdf":
-        command.extend(["--pdf-engine=weasyprint"])
+        css_path = _write_pdf_print_css(output_path)
+        command.extend(["--pdf-engine=weasyprint", "--css", str(css_path)])
 
     try:
         subprocess.run(
@@ -214,6 +215,84 @@ def _convert_markdown_with_pandoc(markdown_text: str, output_path: Path, output_
         if detail:
             message = f"{message}: {detail}"
         raise RuntimeError(message) from exc
+
+
+def _write_pdf_print_css(output_path: Path) -> Path:
+    css_path = output_path.with_suffix(".pdf.css")
+    css_path.write_text(
+        """
+@page {
+  size: A4;
+  margin: 16mm 14mm;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 11pt;
+}
+
+body {
+  color: #111827;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
+  line-height: 1.65;
+}
+
+table {
+  border-collapse: collapse;
+  font-size: 9.5pt;
+  margin: 1em 0;
+  max-width: 100%;
+  table-layout: fixed;
+  width: 100%;
+}
+
+thead {
+  display: table-header-group;
+}
+
+tr {
+  break-inside: avoid;
+}
+
+th,
+td {
+  border: 1px solid #d1d5db;
+  overflow-wrap: anywhere;
+  padding: 4pt 5pt;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+img,
+svg {
+  height: auto;
+  max-width: 100%;
+}
+
+pre {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+blockquote {
+  border-left: 3pt solid #d1d5db;
+  color: #4b5563;
+  margin-left: 0;
+  padding-left: 10pt;
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    return css_path
 
 
 def _format_report_created_at(report: Report) -> str:
