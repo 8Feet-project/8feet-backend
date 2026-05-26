@@ -417,15 +417,15 @@ class ReportCitationDetailApiTests(TestCase):
             conversion_markdown = source_path.read_text(encoding="utf-8")
             self.assertNotEqual(conversion_markdown, exported_markdown_text)
             self.assertIn(
-                "组合引用<sup><a href=\"#reference-1\">[1-2]</a></sup>，未知引用[@MISSING]。",
+                "组合引用[<sup>&#91;1-2&#93;</sup>](#reference-1)，未知引用[@MISSING]。",
                 conversion_markdown,
             )
             self.assertIn(
-                f"1. <span id=\"reference-1\"></span>[{self.citation.source_title}]({self.citation.source_url}) @example_source",
+                f"1. <a id=\"reference-1\"></a>[{self.citation.source_title}]({self.citation.source_url}) @example_source",
                 conversion_markdown,
             )
             self.assertIn(
-                "2. <span id=\"reference-2\"></span>[第二来源](https://example.com/second-source) @second_source",
+                "2. <a id=\"reference-2\"></a>[第二来源](https://example.com/second-source) @second_source",
                 conversion_markdown,
             )
             output_path = Path(command[command.index("-o") + 1])
@@ -469,15 +469,15 @@ class ReportCitationDetailApiTests(TestCase):
             conversion_markdown = source_path.read_text(encoding="utf-8")
             self.assertNotEqual(conversion_markdown, exported_markdown_text)
             self.assertIn(
-                "组合引用<sup><a href=\"#reference-1\">[1-2]</a></sup>，未知引用[@MISSING]。",
+                "组合引用[<sup>&#91;1-2&#93;</sup>](#reference-1)，未知引用[@MISSING]。",
                 conversion_markdown,
             )
             self.assertIn(
-                f"1. <span id=\"reference-1\"></span>[{self.citation.source_title}]({self.citation.source_url}) @example_source",
+                f"1. <a id=\"reference-1\"></a>[{self.citation.source_title}]({self.citation.source_url}) @example_source",
                 conversion_markdown,
             )
             self.assertIn(
-                "2. <span id=\"reference-2\"></span>[第二来源](https://example.com/second-source) @second_source",
+                "2. <a id=\"reference-2\"></a>[第二来源](https://example.com/second-source) @second_source",
                 conversion_markdown,
             )
             output_path = Path(command[command.index("-o") + 1])

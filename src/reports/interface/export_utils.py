@@ -97,7 +97,7 @@ def build_markdown_document(
         for index, item in enumerate(citations):
             number = item["index_number"] if item["index_number"] > 0 else index + 1
             key = f" @{item['cite_key']}" if item["cite_key"] else ""
-            anchor = f"<span id=\"{_citation_anchor_id(number)}\"></span>" if render_citation_marks else ""
+            anchor = f"<a id=\"{_citation_anchor_id(number)}\"></a>" if render_citation_marks else ""
             source = (
                 f"[{item['source_title']}]({item['source_url']})"
                 if item["source_url"] else item["source_title"]
@@ -296,8 +296,14 @@ code {
 
 sup {
   font-size: 0.72em;
-  line-height: 0;
+  line-height: 1;
   vertical-align: super;
+}
+
+sup a,
+a sup {
+  color: inherit;
+  text-decoration: none;
 }
 
 blockquote {
@@ -404,7 +410,7 @@ def _citation_anchor_id(number: int) -> str:
 
 
 def _citation_superscript_link(label: str, target_number: int) -> str:
-    return f"<sup><a href=\"#{_citation_anchor_id(target_number)}\">[{label}]</a></sup>"
+    return f"[<sup>&#91;{label}&#93;</sup>](#{_citation_anchor_id(target_number)})"
 
 
 def _render_citation_marks_as_superscript(markdown_text: str, citations: list[dict[str, Any]]) -> str:
