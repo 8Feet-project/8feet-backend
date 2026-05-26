@@ -15,7 +15,6 @@ class Favorite(models.Model):
     FR-GRXX-0002: 用户可收藏调研信息、报告和常用大模型。
     """
     ITEM_TYPE_CHOICES = [
-        ('INFO', '调研信息'),
         ('REPORT', '调研报告'),
         ('MODEL', '大模型'),
     ]

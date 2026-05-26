@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from analytics.interface.analytics_interface import create_alert, dispatch_alert_report_ready, trigger_due_alerts
 from analytics.models.logs import SystemLog
-from analytics.models.personalization import Alert, UserMessage
+from analytics.models.personalization import Alert, Favorite, UserMessage
 from llm_manager.models import LLMConfig
 from llm_manager.models.model_permission import ModelPermission
 from reports.models.report import Report
@@ -123,6 +123,31 @@ class FavoriteRemarkApiTests(TestCase):
         self.assertEqual(list_payload["code"], 0)
         self.assertEqual(list_payload["data"]["total"], 1)
         self.assertEqual(list_payload["data"]["list"][0]["remark"], "666")
+
+    def test_list_hides_legacy_info_favorites(self):
+        Favorite.objects.create(
+            user=self.user,
+            item_type="INFO",
+            item_id="insight-legacy-001",
+            remark="legacy insight",
+        )
+        Favorite.objects.create(
+            user=self.user,
+            item_type="REPORT",
+            item_id="report-123",
+            remark="report visible",
+        )
+
+        list_response = self.client.get(
+            "/api/v1/favorites/items/",
+            secure=True,
+        )
+
+        self.assertEqual(list_response.status_code, 200)
+        list_payload = list_response.json()
+        self.assertEqual(list_payload["code"], 0)
+        self.assertEqual(list_payload["data"]["total"], 1)
+        self.assertEqual(list_payload["data"]["list"][0]["favorite_type"], "report")
 
 
 class AlertScheduleTests(TestCase):

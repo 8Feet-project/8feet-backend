@@ -164,7 +164,7 @@ def remove_favorite(user_id: int, item_type: str, item_id: str) -> bool:
 
 def list_favorites(user_id: int, item_type: str = None) -> List[dict]:
     """获取收藏列表"""
-    query = Favorite.objects.filter(user_id=user_id)
+    query = Favorite.objects.filter(user_id=user_id).exclude(item_type='INFO')
     if item_type:
         query = query.filter(item_type=item_type)
     return list(query.values('id', 'item_type', 'item_id', 'remark', 'created_at'))

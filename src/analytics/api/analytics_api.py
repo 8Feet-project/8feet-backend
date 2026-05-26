@@ -73,11 +73,8 @@ def _normalize_object_type(value: str) -> str:
 
 def _backend_favorite_type(value: str) -> str:
     mapping = {
-        "insight": "INFO",
-        "info": "INFO",
         "report": "REPORT",
         "model": "MODEL",
-        "INFO": "INFO",
         "REPORT": "REPORT",
         "MODEL": "MODEL",
     }
@@ -96,8 +93,6 @@ def _backend_object_type(value: str) -> str:
 
 def _serialize_favorite(item: dict) -> dict:
     item_type = (item.get("item_type") or "").lower()
-    if item_type == "info":
-        item_type = "insight"
     return {
         "favorite_id": str(item.get("id")),
         "favorite_type": item_type,
@@ -251,7 +246,10 @@ def favorite_add(request: HttpRequest):
     item_id = data.get('target_id')     # 对齐文档参数名
     remark = str(data.get('remark') or '').strip()
 
-    if not item_type or not item_id:
+    if item_type not in {"REPORT", "MODEL"}:
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "favorite_type 仅支持 report 或 model")
+
+    if not item_id:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "缺少必要参数")
 
     item_id = str(item_id).strip()
