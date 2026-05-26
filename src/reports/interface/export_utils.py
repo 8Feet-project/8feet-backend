@@ -15,6 +15,10 @@ from django.utils import timezone
 from reports.models.report import Report
 
 
+CITE_MARK_RE = re.compile(r"\[@([A-Za-z0-9_.:-]+)\]")
+CITE_MARK_GROUP_RE = re.compile(r"\[@[A-Za-z0-9_.:-]+\](?:\s*\[@[A-Za-z0-9_.:-]+\])*")
+
+
 def export_root() -> Path:
     return Path(
         getattr(settings, "REPORT_EXPORT_ROOT", Path(getattr(settings, "BASE_DIR", ".")).parent / "generated_reports")
@@ -71,9 +75,15 @@ def build_brief_from_markdown(report: Report) -> str:
     return "\n".join(brief_lines).strip()
 
 
-def build_markdown_document(report: Report, report_mode: str = "full") -> str:
+def build_markdown_document(
+    report: Report,
+    report_mode: str = "full",
+    render_citation_marks: bool = False,
+) -> str:
     content = get_report_content(report, report_mode)
     citations = _export_citations(report)
+    if render_citation_marks:
+        content = _render_citation_marks_as_superscript(content, citations)
     parts = [
         f"# {report.title}",
         "",
@@ -164,7 +174,7 @@ def export_html(report: Report, report_mode: str = "full") -> str:
 
 
 def export_docx(report: Report, report_mode: str = "full") -> str:
-    markdown_text = build_markdown_document(report, report_mode)
+    markdown_text = build_markdown_document(report, report_mode, render_citation_marks=True)
     output_dir = ensure_export_root()
     filename = report_export_basename(report, report_mode, "docx")
     file_path = output_dir / filename
@@ -174,7 +184,7 @@ def export_docx(report: Report, report_mode: str = "full") -> str:
 
 
 def export_pdf(report: Report, report_mode: str = "full") -> str:
-    markdown_text = build_markdown_document(report, report_mode)
+    markdown_text = build_markdown_document(report, report_mode, render_citation_marks=True)
     output_dir = ensure_export_root()
     filename = report_export_basename(report, report_mode, "pdf")
     file_path = output_dir / filename
@@ -283,6 +293,12 @@ code {
   word-break: break-word;
 }
 
+sup {
+  font-size: 0.72em;
+  line-height: 0;
+  vertical-align: super;
+}
+
 blockquote {
   border-left: 3pt solid #d1d5db;
   color: #4b5563;
@@ -344,6 +360,70 @@ def _export_citations(report: Report) -> list[dict[str, Any]]:
         }
         for item in enriched_rows
     ]
+
+
+def _normalize_cite_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _citation_number(citation: dict[str, Any], fallback_index: int) -> int:
+    number = citation.get("index_number")
+    try:
+        number = int(number)
+    except (TypeError, ValueError):
+        number = 0
+    return number if number > 0 else fallback_index + 1
+
+
+def _compact_citation_numbers(numbers: list[int]) -> str:
+    sorted_numbers = sorted(set(numbers))
+    ranges: list[str] = []
+    range_start: int | None = None
+    previous: int | None = None
+
+    for number in sorted_numbers:
+        if range_start is None or previous is None:
+            range_start = number
+            previous = number
+            continue
+        if number == previous + 1:
+            previous = number
+            continue
+        ranges.append(str(range_start) if range_start == previous else f"{range_start}-{previous}")
+        range_start = number
+        previous = number
+
+    if range_start is not None and previous is not None:
+        ranges.append(str(range_start) if range_start == previous else f"{range_start}-{previous}")
+    return ",".join(ranges)
+
+
+def _render_citation_marks_as_superscript(markdown_text: str, citations: list[dict[str, Any]]) -> str:
+    by_key = {
+        _normalize_cite_key(citation.get("cite_key")): _citation_number(citation, index)
+        for index, citation in enumerate(citations)
+        if _normalize_cite_key(citation.get("cite_key"))
+    }
+    if not by_key:
+        return markdown_text
+
+    def replace_group(match: re.Match[str]) -> str:
+        cite_keys = [item.group(1) for item in CITE_MARK_RE.finditer(match.group(0))]
+        numbers = [by_key.get(_normalize_cite_key(cite_key)) for cite_key in cite_keys]
+        known_numbers = [number for number in numbers if number is not None]
+
+        if known_numbers and len(known_numbers) == len(cite_keys):
+            return f"<sup>[{_compact_citation_numbers(known_numbers)}]</sup>"
+
+        rendered_parts = []
+        for cite_key, number in zip(cite_keys, numbers):
+            if number is None:
+                rendered_parts.append(f"[@{cite_key}]")
+            else:
+                rendered_parts.append(f"<sup>[{number}]</sup>")
+        return "".join(rendered_parts)
+
+    return CITE_MARK_GROUP_RE.sub(replace_group, markdown_text or "")
 
 
 def _build_citations_html(citations: list[dict[str, Any]]) -> str:

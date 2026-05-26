@@ -401,10 +401,24 @@ class ReportCitationDetailApiTests(TestCase):
             self.assertIn("1. [线程来源](https://example.com/thread-source) @thread_source", markdown_text)
             self.assertIn("   - 来源：example.com", markdown_text)
 
-    def test_docx_export_uses_pandoc_with_same_markdown_as_md_export(self):
+    def test_docx_export_renders_citation_marks_as_superscript_for_pandoc(self):
+        Citation.objects.create(
+            report=self.report,
+            index_number=2,
+            source_url="https://example.com/second-source",
+            source_title="第二来源",
+            cited_text_snippet="第二引用摘要",
+        )
+        self.report.content_markdown = "# 报告\n\n组合引用[@EXAMPLE_SOURCE][@SECOND_SOURCE]，未知引用[@MISSING]。"
+        self.report.save(update_fields=["content_markdown"])
+
         def fake_run(command, **kwargs):
             source_path = Path(command[1])
-            self.assertEqual(source_path.read_text(encoding="utf-8"), exported_markdown_text)
+            conversion_markdown = source_path.read_text(encoding="utf-8")
+            self.assertNotEqual(conversion_markdown, exported_markdown_text)
+            self.assertIn("组合引用<sup>[1-2]</sup>，未知引用[@MISSING]。", conversion_markdown)
+            self.assertIn(f"1. [{self.citation.source_title}]({self.citation.source_url}) @example_source", conversion_markdown)
+            self.assertIn("2. [第二来源](https://example.com/second-source) @second_source", conversion_markdown)
             output_path = Path(command[command.index("-o") + 1])
             output_path.write_bytes(b"docx-content")
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -415,6 +429,7 @@ class ReportCitationDetailApiTests(TestCase):
             run_export_job(int(data["export_id"]))
             export_record = get_export_record(int(data["export_id"]))
             exported_markdown_text = (Path(tmpdir) / export_record["storage_path"]).read_text(encoding="utf-8")
+            self.assertIn("组合引用[@EXAMPLE_SOURCE][@SECOND_SOURCE]，未知引用[@MISSING]。", exported_markdown_text)
 
             with patch("reports.interface.export_utils.subprocess.run", side_effect=fake_run) as run_mock:
                 success, message, data = export_report_file(self.report.id, "docx", "full")
@@ -429,10 +444,24 @@ class ReportCitationDetailApiTests(TestCase):
             self.assertIn("gfm", command)
             self.assertNotIn("--pdf-engine=weasyprint", command)
 
-    def test_pdf_export_uses_pandoc_with_weasyprint_and_same_markdown_as_md_export(self):
+    def test_pdf_export_renders_citation_marks_as_superscript_for_pandoc(self):
+        Citation.objects.create(
+            report=self.report,
+            index_number=2,
+            source_url="https://example.com/second-source",
+            source_title="第二来源",
+            cited_text_snippet="第二引用摘要",
+        )
+        self.report.content_markdown = "# 报告\n\n组合引用[@EXAMPLE_SOURCE][@SECOND_SOURCE]，未知引用[@MISSING]。"
+        self.report.save(update_fields=["content_markdown"])
+
         def fake_run(command, **kwargs):
             source_path = Path(command[1])
-            self.assertEqual(source_path.read_text(encoding="utf-8"), exported_markdown_text)
+            conversion_markdown = source_path.read_text(encoding="utf-8")
+            self.assertNotEqual(conversion_markdown, exported_markdown_text)
+            self.assertIn("组合引用<sup>[1-2]</sup>，未知引用[@MISSING]。", conversion_markdown)
+            self.assertIn(f"1. [{self.citation.source_title}]({self.citation.source_url}) @example_source", conversion_markdown)
+            self.assertIn("2. [第二来源](https://example.com/second-source) @second_source", conversion_markdown)
             output_path = Path(command[command.index("-o") + 1])
             output_path.write_bytes(b"pdf-content")
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -443,6 +472,7 @@ class ReportCitationDetailApiTests(TestCase):
             run_export_job(int(data["export_id"]))
             export_record = get_export_record(int(data["export_id"]))
             exported_markdown_text = (Path(tmpdir) / export_record["storage_path"]).read_text(encoding="utf-8")
+            self.assertIn("组合引用[@EXAMPLE_SOURCE][@SECOND_SOURCE]，未知引用[@MISSING]。", exported_markdown_text)
 
             with patch("reports.interface.export_utils.subprocess.run", side_effect=fake_run) as run_mock:
                 success, message, data = export_report_file(self.report.id, "pdf", "full")
