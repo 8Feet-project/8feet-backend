@@ -336,6 +336,7 @@ def serialize_model_available(config: LLMConfig) -> dict:
         "model_id": str(config.id),
         "model_name": config.name,
         "provider": config.provider,
+        "description": config.description or "",
     }
 
 
@@ -416,6 +417,7 @@ def serialize_admin_model_item(config: LLMConfig) -> dict:
         "api_base_url": config.api_endpoint or "",
         "context_window": config.context_window,
         "temperature": float(params.get("temperature", 0.2)),
+        "description": config.description,
         "enabled": config.is_enabled,
         "connectivity_status": _connectivity_status(config),
         "updated_at": config.updated_at.isoformat() if config.updated_at else "",
