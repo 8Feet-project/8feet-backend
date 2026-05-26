@@ -139,11 +139,18 @@ def get_dashboard_stats(start_time=None, end_time=None, user=None) -> dict:
     }
 
 
-def add_favorite(user_id: int, item_type: str, item_id: str) -> bool:
+def add_favorite(user_id: int, item_type: str, item_id: str, remark: str = "") -> bool:
     """添加收藏"""
-    _, created = Favorite.objects.get_or_create(
-        user_id=user_id, item_type=item_type, item_id=str(item_id)
+    normalized_remark = str(remark or "").strip()
+    favorite, created = Favorite.objects.get_or_create(
+        user_id=user_id,
+        item_type=item_type,
+        item_id=str(item_id),
+        defaults={"remark": normalized_remark},
     )
+    if not created and normalized_remark and favorite.remark != normalized_remark:
+        favorite.remark = normalized_remark
+        favorite.save(update_fields=["remark"])
     return created
 
 
@@ -160,7 +167,7 @@ def list_favorites(user_id: int, item_type: str = None) -> List[dict]:
     query = Favorite.objects.filter(user_id=user_id)
     if item_type:
         query = query.filter(item_type=item_type)
-    return list(query.values('id', 'item_type', 'item_id', 'created_at'))
+    return list(query.values('id', 'item_type', 'item_id', 'remark', 'created_at'))
 
 
 SCHEDULE_DAILY = 'daily'

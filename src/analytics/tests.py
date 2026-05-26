@@ -81,6 +81,50 @@ class AdminLogPermissionTests(TestCase):
         self.assertEqual(payload["data"]["total"], 1)
 
 
+class FavoriteRemarkApiTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="favorite-user",
+            email="favorite-user@example.com",
+            password="test-pass-123",
+        )
+        self.token = jwt.encode(
+            {"user_id": self.user.id, "type": "access_token"},
+            settings.SECRET_KEY,
+            algorithm="HS256",
+        )
+        self.client = Client(HTTP_AUTHORIZATION=f"Bearer {self.token}")
+
+    def test_create_and_list_favorite_preserves_remark(self):
+        response = self.client.post(
+            "/api/v1/favorites/items/",
+            data={
+                "favorite_type": "report",
+                "target_id": "report-123",
+                "remark": "666",
+            },
+            content_type="application/json",
+            secure=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["code"], 0)
+        self.assertTrue(payload["data"]["favorite_id"])
+
+        list_response = self.client.get(
+            "/api/v1/favorites/items/",
+            data={"favorite_type": "report"},
+            secure=True,
+        )
+
+        self.assertEqual(list_response.status_code, 200)
+        list_payload = list_response.json()
+        self.assertEqual(list_payload["code"], 0)
+        self.assertEqual(list_payload["data"]["total"], 1)
+        self.assertEqual(list_payload["data"]["list"][0]["remark"], "666")
+
+
 class AlertScheduleTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(

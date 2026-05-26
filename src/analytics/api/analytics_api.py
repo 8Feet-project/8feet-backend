@@ -102,7 +102,7 @@ def _serialize_favorite(item: dict) -> dict:
         "favorite_id": str(item.get("id")),
         "favorite_type": item_type,
         "target_id": str(item.get("item_id")),
-        "remark": "",
+        "remark": item.get("remark") or "",
     }
 
 
@@ -249,6 +249,7 @@ def favorite_add(request: HttpRequest):
     item_type = data.get('favorite_type') # 对齐文档参数名
     item_type = _backend_favorite_type(item_type)
     item_id = data.get('target_id')     # 对齐文档参数名
+    remark = str(data.get('remark') or '').strip()
 
     if not item_type or not item_id:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "缺少必要参数")
@@ -257,7 +258,7 @@ def favorite_add(request: HttpRequest):
     if not item_id:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "target_id 不能为空")
 
-    created = add_favorite(request.user.id, item_type, item_id)
+    created = add_favorite(request.user.id, item_type, item_id, remark)
     favorites = list_favorites(request.user.id, item_type)
     latest = next((item for item in favorites if str(item.get("item_id")) == str(item_id)), None)
     return success_api_response({

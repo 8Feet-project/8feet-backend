@@ -31,6 +31,10 @@ class Favorite(models.Model):
         max_length=128,
         help_text="收藏对象业务 ID (如 report-001/model-001)"
     )
+    remark = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text="收藏备注"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
