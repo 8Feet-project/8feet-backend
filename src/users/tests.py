@@ -2,9 +2,12 @@ import jwt
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group, Permission
 from django.test import Client, TestCase
 from unittest.mock import Mock, patch
 
+from shared.permissions import ROLE_GROUP_MAP
+from users.signals import sync_role_group_permissions_after_migrate
 from users.interface.persona_interface import save_user_persona_report, should_prompt_persona
 from users.interface.persona_runtime import (
     PERSONA_TOOLS,
@@ -111,6 +114,25 @@ class UserPersonaRegistrationTests(TestCase):
         self.assertEqual(result["role"], ROLE_USER)
         self.assertTrue(result["should_prompt_persona"])
         self.assertFalse(UserPersona.objects.filter(user__username="regular").exists())
+
+
+class UserRolePermissionSyncTests(TestCase):
+    def test_post_migrate_syncs_updated_user_role_permissions(self):
+        group, _ = Group.objects.get_or_create(name=ROLE_GROUP_MAP[ROLE_USER])
+        create_permission = Permission.objects.get(
+            content_type__app_label="research",
+            codename="create_research",
+        )
+        cancel_permission = Permission.objects.get(
+            content_type__app_label="research",
+            codename="cancel_research",
+        )
+        group.permissions.set([create_permission])
+
+        sync_role_group_permissions_after_migrate(sender=None)
+
+        group.refresh_from_db()
+        self.assertTrue(group.permissions.filter(pk=cancel_permission.pk).exists())
 
 
 class UserPersonaRuntimeTests(TestCase):
