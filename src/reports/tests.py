@@ -347,13 +347,72 @@ class ReportCitationDetailApiTests(TestCase):
             body = b"".join(download_response.streaming_content).decode("utf-8")
             self.assertIn("# 测试调研报告", body)
 
-    def test_docx_export_uses_pandoc(self):
+    def test_markdown_export_matches_frontend_shape(self):
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(REPORT_EXPORT_ROOT=tmpdir):
+            success, message, data = export_report_file(self.report.id, "md", "full")
+            self.assertTrue(success, message)
+
+            result = run_export_job(int(data["export_id"]))
+
+            self.assertEqual(result["status"], "completed")
+            markdown_path = Path(tmpdir) / result["storage_path"]
+            markdown_text = markdown_path.read_text(encoding="utf-8")
+            self.assertIn(f"# {self.report.title}", markdown_text)
+            self.assertIn(f"报告 ID：{self.report.id}", markdown_text)
+            self.assertIn(f"任务 ID：{self.task.id}", markdown_text)
+            self.assertIn(self.report.content_markdown, markdown_text)
+            self.assertIn("---", markdown_text)
+            self.assertIn("## 引用来源", markdown_text)
+            self.assertIn(f"1. [{self.citation.source_title}]({self.citation.source_url})", markdown_text)
+            self.assertNotIn("摘要：", markdown_text)
+
+    def test_markdown_export_includes_state_only_citations_like_report_detail(self):
+        self.report.content_markdown = "# 报告\n\n结论来自模型线程保留的引用[@THREAD_SOURCE]。"
+        self.report.save(update_fields=["content_markdown"])
+        self.citation.delete()
+        ResearchConversation.objects.create(
+            task=self.task,
+            thread_id="thread-state-only-citation-export",
+            state_snapshot={
+                "citations": [
+                    {
+                        "cite_key": "THREAD_SOURCE",
+                        "url": "https://example.com/thread-source",
+                        "title": "线程来源",
+                        "source_platform": "example.com",
+                        "provider": "web_fetch",
+                        "tool_name": "web_fetch",
+                        "summary": "线程来源摘要",
+                    }
+                ]
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(REPORT_EXPORT_ROOT=tmpdir):
+            success, message, data = export_report_file(self.report.id, "md", "full")
+            self.assertTrue(success, message)
+
+            result = run_export_job(int(data["export_id"]))
+
+            markdown_path = Path(tmpdir) / result["storage_path"]
+            markdown_text = markdown_path.read_text(encoding="utf-8")
+            self.assertIn("1. [线程来源](https://example.com/thread-source) @thread_source", markdown_text)
+            self.assertIn("   - 来源：example.com", markdown_text)
+
+    def test_docx_export_uses_pandoc_with_same_markdown_as_md_export(self):
         def fake_run(command, **kwargs):
+            source_path = Path(command[1])
+            self.assertEqual(source_path.read_text(encoding="utf-8"), exported_markdown_text)
             output_path = Path(command[command.index("-o") + 1])
             output_path.write_bytes(b"docx-content")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(REPORT_EXPORT_ROOT=tmpdir):
+            success, message, data = export_report_file(self.report.id, "md", "full")
+            self.assertTrue(success, message)
+            markdown_result = run_export_job(int(data["export_id"]))
+            exported_markdown_text = (Path(tmpdir) / markdown_result["storage_path"]).read_text(encoding="utf-8")
+
             with patch("reports.interface.export_utils.subprocess.run", side_effect=fake_run) as run_mock:
                 success, message, data = export_report_file(self.report.id, "docx", "full")
                 self.assertTrue(success, message)
@@ -367,13 +426,20 @@ class ReportCitationDetailApiTests(TestCase):
             self.assertIn("gfm", command)
             self.assertNotIn("--pdf-engine=weasyprint", command)
 
-    def test_pdf_export_uses_pandoc_with_weasyprint(self):
+    def test_pdf_export_uses_pandoc_with_weasyprint_and_same_markdown_as_md_export(self):
         def fake_run(command, **kwargs):
+            source_path = Path(command[1])
+            self.assertEqual(source_path.read_text(encoding="utf-8"), exported_markdown_text)
             output_path = Path(command[command.index("-o") + 1])
             output_path.write_bytes(b"pdf-content")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(REPORT_EXPORT_ROOT=tmpdir):
+            success, message, data = export_report_file(self.report.id, "md", "full")
+            self.assertTrue(success, message)
+            markdown_result = run_export_job(int(data["export_id"]))
+            exported_markdown_text = (Path(tmpdir) / markdown_result["storage_path"]).read_text(encoding="utf-8")
+
             with patch("reports.interface.export_utils.subprocess.run", side_effect=fake_run) as run_mock:
                 success, message, data = export_report_file(self.report.id, "pdf", "full")
                 self.assertTrue(success, message)

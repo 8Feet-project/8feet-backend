@@ -6,9 +6,11 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
-from typing import Iterable
+from typing import Any
+from urllib.parse import quote
 
 from django.conf import settings
+from django.utils import timezone
 
 from reports.models.report import Report
 
@@ -71,39 +73,34 @@ def build_brief_from_markdown(report: Report) -> str:
 
 def build_markdown_document(report: Report, report_mode: str = "full") -> str:
     content = get_report_content(report, report_mode)
-    citations = list(report.citations.order_by("index_number").values(
-        "index_number", "source_title", "source_url", "cited_text_snippet"
-    ))
+    citations = _export_citations(report)
     parts = [
         f"# {report.title}",
         "",
-        f"> 摘要：{report.summary}",
+        f"> 报告 ID：{report.id}　｜　任务 ID：{report.task_id}　｜　生成时间：{_format_report_created_at(report)}",
         "",
         content,
     ]
 
     if citations:
-        parts.extend(["", "## 引用来源", ""])
-        for item in citations:
-            snippet = f" - 引文：{item['cited_text_snippet']}" if item["cited_text_snippet"] else ""
-            parts.append(
-                f"{item['index_number']}. {item['source_title']} ({item['source_url']}){snippet}"
+        parts.extend(["", "---", "", "## 引用来源", ""])
+        for index, item in enumerate(citations):
+            number = item["index_number"] if item["index_number"] > 0 else index + 1
+            key = f" @{item['cite_key']}" if item["cite_key"] else ""
+            source = (
+                f"[{item['source_title']}]({item['source_url']})"
+                if item["source_url"] else item["source_title"]
             )
+            parts.append(f"{number}. {source}{key}")
+
+            source_meta = [item["source_platform"], item["source_type"]]
+            source_meta = [value for value in source_meta if value]
+            if source_meta:
+                parts.append(f"   - 来源：{' / '.join(source_meta)}")
+            if not item["source_url"] and item["reproduction_code"]:
+                parts.extend(["   - 复现代码：", "```python", item["reproduction_code"], "```"])
 
     return "\n".join(part for part in parts if part is not None).strip() + "\n"
-
-
-def markdown_to_plain_text(markdown_text: str) -> str:
-    text = markdown_text.replace("\r\n", "\n")
-    text = re.sub(r"```.*?```", "", text, flags=re.S)
-    text = re.sub(r"`([^`]*)`", r"\1", text)
-    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", text)
-    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
-    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.M)
-    text = re.sub(r"^\>\s?", "", text, flags=re.M)
-    text = re.sub(r"^\-\s+", "• ", text, flags=re.M)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
 
 
 def report_export_basename(report: Report, report_mode: str, extension: str) -> str:
@@ -121,25 +118,46 @@ def export_markdown(report: Report, report_mode: str = "full") -> tuple[str, str
 
 
 def export_html(report: Report, report_mode: str = "full") -> str:
-    markdown_text = build_markdown_document(report, report_mode)
-    plain_text = markdown_to_plain_text(markdown_text)
+    content = get_report_content(report, report_mode)
+    citations = _export_citations(report)
     output_dir = ensure_export_root()
     filename = report_export_basename(report, report_mode, "html")
     file_path = output_dir / filename
 
-    escaped_title = (
-        report.title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    escaped_title = _escape_html(report.title)
+    escaped_meta = _escape_html(
+        f"报告 ID：{report.id}　｜　任务 ID：{report.task_id}　｜　生成时间：{_format_report_created_at(report)}"
     )
-    body = "".join(
-        f"<p>{block.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace(chr(10), '<br/>')}</p>"
-        for block in _iter_blocks(plain_text)
-    )
+    citations_html = _build_citations_html(citations)
     html = (
-        "<!DOCTYPE html>"
-        "<html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
-        f"<title>{escaped_title}</title>"
-        "<style>body{font-family:Arial,'Microsoft YaHei',sans-serif;max-width:960px;margin:40px auto;line-height:1.8;color:#1f2937;padding:0 16px;}h1{margin-bottom:24px;}p{margin:0 0 16px;white-space:pre-wrap;}</style>"
-        f"</head><body><h1>{escaped_title}</h1>{body}</body></html>"
+        "<!DOCTYPE html>\n"
+        "<html lang=\"zh-CN\">\n"
+        "<head>\n"
+        "<meta charset=\"UTF-8\"/>\n"
+        f"<title>{escaped_title}</title>\n"
+        "<style>\n"
+        "  body { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, \"Noto Sans SC\", sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #1e293b; line-height: 1.8; }\n"
+        "  h1 { font-size: 1.75rem; margin-bottom: 0.25em; }\n"
+        "  .meta { color: #64748b; font-size: 0.85rem; margin-bottom: 1.5em; }\n"
+        "  .content { white-space: pre-wrap; font-size: 1rem; }\n"
+        "  hr { border: none; border-top: 1px solid #e2e8f0; margin: 2em 0; }\n"
+        "  h2 { font-size: 1.25rem; }\n"
+        "  ol { padding-left: 1.25em; }\n"
+        "  li { margin-bottom: 0.35em; }\n"
+        "  a { color: #2563eb; text-decoration: none; }\n"
+        "  a:hover { text-decoration: underline; }\n"
+        "  .citation-meta { color: #64748b; font-size: 0.85rem; }\n"
+        "  pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; overflow-x: auto; padding: 0.75rem; }\n"
+        "  @media print { body { margin: 0; } }\n"
+        "</style>\n"
+        "</head>\n"
+        "<body>\n"
+        f"<h1>{escaped_title}</h1>\n"
+        f"<p class=\"meta\">{escaped_meta}</p>\n"
+        f"<div class=\"content\">{_escape_html(content)}</div>\n"
+        f"{citations_html}\n"
+        "</body>\n"
+        "</html>"
     )
     file_path.write_text(html, encoding="utf-8")
     return str(file_path)
@@ -163,10 +181,6 @@ def export_pdf(report: Report, report_mode: str = "full") -> str:
 
     _convert_markdown_with_pandoc(markdown_text, file_path, "pdf")
     return str(file_path)
-
-
-def _iter_blocks(text: str) -> Iterable[str]:
-    return [block.strip() for block in text.split("\n\n") if block.strip()]
 
 
 def _convert_markdown_with_pandoc(markdown_text: str, output_path: Path, output_format: str) -> None:
@@ -200,3 +214,82 @@ def _convert_markdown_with_pandoc(markdown_text: str, output_path: Path, output_
         if detail:
             message = f"{message}: {detail}"
         raise RuntimeError(message) from exc
+
+
+def _format_report_created_at(report: Report) -> str:
+    value = report.created_at
+    if not value:
+        return ""
+    if timezone.is_naive(value):
+        return value.isoformat()
+    return timezone.localtime(value).isoformat()
+
+
+def _escape_html(text: Any) -> str:
+    return (
+        str(text or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _encode_uri(value: str) -> str:
+    return quote(value, safe=":/?#[]@!$&'()*+,;=%")
+
+
+def _export_citations(report: Report) -> list[dict[str, Any]]:
+    rows = list(
+        report.citations.order_by("index_number").values(
+            "id",
+            "index_number",
+            "source_title",
+            "source_url",
+            "cited_text_snippet",
+            "reproduction_code",
+        )
+    )
+    from reports.interface.report_interface import _enrich_citations_from_state
+
+    enriched_rows = _enrich_citations_from_state(report, rows)
+    return [
+        {
+            "index_number": int(item.get("index_number") or 0),
+            "cite_key": str(item.get("cite_key") or "").strip(),
+            "source_title": str(item.get("source_title") or "").strip(),
+            "source_url": str(item.get("source_url") or "").strip(),
+            "source_platform": str(item.get("source_platform") or "").strip(),
+            "source_type": str(item.get("source_type") or "").strip(),
+            "reproduction_code": str(item.get("reproduction_code") or ""),
+        }
+        for item in enriched_rows
+    ]
+
+
+def _build_citations_html(citations: list[dict[str, Any]]) -> str:
+    if not citations:
+        return ""
+
+    items = []
+    for citation in citations:
+        if citation["source_url"]:
+            title = (
+                f"<a href=\"{_encode_uri(citation['source_url'])}\" target=\"_blank\" rel=\"noopener noreferrer\">"
+                f"{_escape_html(citation['source_title'])}</a>"
+            )
+        else:
+            title = _escape_html(citation["source_title"])
+        key = f" <code>@{_escape_html(citation['cite_key'])}</code>" if citation["cite_key"] else ""
+        meta = " / ".join(
+            _escape_html(value)
+            for value in [citation["source_platform"], citation["source_type"]]
+            if value
+        )
+        meta_html = f"<div class=\"citation-meta\">{meta}</div>" if meta else ""
+        code_html = (
+            f"<pre><code>{_escape_html(citation['reproduction_code'])}</code></pre>"
+            if not citation["source_url"] and citation["reproduction_code"] else ""
+        )
+        items.append(f"<li>{title}{key}{meta_html}{code_html}</li>")
+    return f"<hr/><h2>引用来源</h2><ol>{''.join(items)}</ol>"
