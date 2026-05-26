@@ -9,7 +9,7 @@ from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 from unittest.mock import Mock, patch
 
-from reports.interface.report_interface import export_report_file, run_export_job
+from reports.interface.report_interface import export_report_file, get_export_record, run_export_job
 from reports.models.citation import Citation, ReportFollowup
 from reports.models.report import Report
 from research.models.conversation import ResearchConversation
@@ -355,7 +355,8 @@ class ReportCitationDetailApiTests(TestCase):
             result = run_export_job(int(data["export_id"]))
 
             self.assertEqual(result["status"], "completed")
-            markdown_path = Path(tmpdir) / result["storage_path"]
+            export_record = get_export_record(int(data["export_id"]))
+            markdown_path = Path(tmpdir) / export_record["storage_path"]
             markdown_text = markdown_path.read_text(encoding="utf-8")
             self.assertIn(f"# {self.report.title}", markdown_text)
             self.assertIn(f"报告 ID：{self.report.id}", markdown_text)
@@ -394,7 +395,8 @@ class ReportCitationDetailApiTests(TestCase):
 
             result = run_export_job(int(data["export_id"]))
 
-            markdown_path = Path(tmpdir) / result["storage_path"]
+            export_record = get_export_record(int(data["export_id"]))
+            markdown_path = Path(tmpdir) / export_record["storage_path"]
             markdown_text = markdown_path.read_text(encoding="utf-8")
             self.assertIn("1. [线程来源](https://example.com/thread-source) @thread_source", markdown_text)
             self.assertIn("   - 来源：example.com", markdown_text)
@@ -410,8 +412,9 @@ class ReportCitationDetailApiTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(REPORT_EXPORT_ROOT=tmpdir):
             success, message, data = export_report_file(self.report.id, "md", "full")
             self.assertTrue(success, message)
-            markdown_result = run_export_job(int(data["export_id"]))
-            exported_markdown_text = (Path(tmpdir) / markdown_result["storage_path"]).read_text(encoding="utf-8")
+            run_export_job(int(data["export_id"]))
+            export_record = get_export_record(int(data["export_id"]))
+            exported_markdown_text = (Path(tmpdir) / export_record["storage_path"]).read_text(encoding="utf-8")
 
             with patch("reports.interface.export_utils.subprocess.run", side_effect=fake_run) as run_mock:
                 success, message, data = export_report_file(self.report.id, "docx", "full")
@@ -437,8 +440,9 @@ class ReportCitationDetailApiTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, override_settings(REPORT_EXPORT_ROOT=tmpdir):
             success, message, data = export_report_file(self.report.id, "md", "full")
             self.assertTrue(success, message)
-            markdown_result = run_export_job(int(data["export_id"]))
-            exported_markdown_text = (Path(tmpdir) / markdown_result["storage_path"]).read_text(encoding="utf-8")
+            run_export_job(int(data["export_id"]))
+            export_record = get_export_record(int(data["export_id"]))
+            exported_markdown_text = (Path(tmpdir) / export_record["storage_path"]).read_text(encoding="utf-8")
 
             with patch("reports.interface.export_utils.subprocess.run", side_effect=fake_run) as run_mock:
                 success, message, data = export_report_file(self.report.id, "pdf", "full")
