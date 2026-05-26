@@ -10,7 +10,9 @@ from uuid import uuid4
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
+from langchain_core.messages import HumanMessage
 
+from efeet.models.factory import create_chat_model
 from llm_manager.models.llm_config import LLMConfig
 from llm_manager.models.model_permission import (
     ModelObjectMapping,
@@ -29,6 +31,8 @@ MODEL_PERMISSION_GROUP_OPTIONS = [
     {"group_id": "group-admin", "role": "admin", "label": "管理员"},
     {"group_id": "group-user", "role": "user", "label": "普通用户"},
 ]
+
+LLM_CONNECTION_TEST_TIMEOUT_SECONDS = 10.0
 
 OBJECT_TYPE_ALIASES = {
     "company": OBJECT_TYPE_COMPANY,
@@ -434,27 +438,41 @@ def list_llm_configs(is_enabled: bool = None) -> list[dict]:
 
 
 def test_llm_config_connection(config_id: int) -> tuple[bool, str | None, dict | None]:
-    """校验模型运行时必需配置，并更新在线状态。
-
-    这里不直接请求第三方模型，避免管理端保存动作因外部网络阻塞；真实调用仍由
-    research runtime 使用 get_provider_runtime_config 后进入 provider SDK。
-    """
+    """真实轻量调用一次模型，并更新在线状态。"""
     config = LLMConfig.objects.filter(pk=config_id).first()
     if not config:
         return (False, "模型不存在", None)
+
     started = perf_counter()
-    ok, message, _runtime = get_provider_runtime_config(config)
+    ok, message, runtime = get_provider_runtime_config(config)
+    if ok:
+        try:
+            model = create_chat_model(
+                model=runtime["model"],
+                api_key=runtime["api_key"],
+                base_url=runtime["base_url"],
+                provider=runtime.get("provider"),
+                debug_provider_http=runtime.get("debug_provider_http", False),
+                streaming=False,
+                timeout_seconds=LLM_CONNECTION_TEST_TIMEOUT_SECONDS,
+            )
+            model.invoke([HumanMessage(content="ping")])
+            message = "模型连通性测试成功"
+        except Exception as exc:  # noqa: BLE001 - provider SDKs raise heterogeneous errors.
+            ok = False
+            message = f"连接测试失败：{exc}"
+
     latency_ms = max(int((perf_counter() - started) * 1000), 1)
-    config.is_online = bool(ok)
+    config.is_online = ok
     config.save(update_fields=["is_online", "updated_at"])
     return (
         True,
         None,
         {
             "model_id": str(config.id),
-            "success": bool(ok),
+            "success": ok,
             "latency_ms": latency_ms,
-            "message": "模型配置完整，可进入运行时调用" if ok else message,
+            "message": message,
         },
     )
 
