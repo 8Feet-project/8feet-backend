@@ -398,7 +398,8 @@ class ReportCitationDetailApiTests(TestCase):
             export_record = get_export_record(int(data["export_id"]))
             markdown_path = Path(tmpdir) / export_record["storage_path"]
             markdown_text = markdown_path.read_text(encoding="utf-8")
-            self.assertIn("1. [线程来源](https://example.com/thread-source) @thread_source", markdown_text)
+            self.assertIn("1. [线程来源](https://example.com/thread-source)", markdown_text)
+            self.assertNotIn("@thread_source", markdown_text)
             self.assertIn("   - 来源：example.com", markdown_text)
 
     def test_docx_export_renders_citation_marks_as_superscript_for_pandoc(self):
@@ -417,17 +418,19 @@ class ReportCitationDetailApiTests(TestCase):
             conversion_markdown = source_path.read_text(encoding="utf-8")
             self.assertNotEqual(conversion_markdown, exported_markdown_text)
             self.assertIn(
-                "组合引用[<sup>&#91;1-2&#93;</sup>](#reference-1)，未知引用[@MISSING]。",
+                "组合引用<a class=\"citation-link\" href=\"#reference-1\"><sup>&#91;1-2&#93;</sup></a>，未知引用[@MISSING]。",
                 conversion_markdown,
             )
             self.assertIn(
-                f"1. <a id=\"reference-1\"></a>[{self.citation.source_title}]({self.citation.source_url}) @example_source",
+                f"1. <a id=\"reference-1\"></a>[{self.citation.source_title}]({self.citation.source_url})",
                 conversion_markdown,
             )
             self.assertIn(
-                "2. <a id=\"reference-2\"></a>[第二来源](https://example.com/second-source) @second_source",
+                "2. <a id=\"reference-2\"></a>[第二来源](https://example.com/second-source)",
                 conversion_markdown,
             )
+            self.assertNotIn("@example_source", conversion_markdown)
+            self.assertNotIn("@second_source", conversion_markdown)
             output_path = Path(command[command.index("-o") + 1])
             output_path.write_bytes(b"docx-content")
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -450,7 +453,7 @@ class ReportCitationDetailApiTests(TestCase):
             command = run_mock.call_args.args[0]
             self.assertEqual(command[0], "pandoc")
             self.assertIn("-f", command)
-            self.assertIn("gfm", command)
+            self.assertIn("gfm+raw_html", command)
             self.assertNotIn("--pdf-engine=weasyprint", command)
 
     def test_pdf_export_renders_citation_marks_as_superscript_for_pandoc(self):
@@ -469,17 +472,19 @@ class ReportCitationDetailApiTests(TestCase):
             conversion_markdown = source_path.read_text(encoding="utf-8")
             self.assertNotEqual(conversion_markdown, exported_markdown_text)
             self.assertIn(
-                "组合引用[<sup>&#91;1-2&#93;</sup>](#reference-1)，未知引用[@MISSING]。",
+                "组合引用<a class=\"citation-link\" href=\"#reference-1\"><sup>&#91;1-2&#93;</sup></a>，未知引用[@MISSING]。",
                 conversion_markdown,
             )
             self.assertIn(
-                f"1. <a id=\"reference-1\"></a>[{self.citation.source_title}]({self.citation.source_url}) @example_source",
+                f"1. <a id=\"reference-1\"></a>[{self.citation.source_title}]({self.citation.source_url})",
                 conversion_markdown,
             )
             self.assertIn(
-                "2. <a id=\"reference-2\"></a>[第二来源](https://example.com/second-source) @second_source",
+                "2. <a id=\"reference-2\"></a>[第二来源](https://example.com/second-source)",
                 conversion_markdown,
             )
+            self.assertNotIn("@example_source", conversion_markdown)
+            self.assertNotIn("@second_source", conversion_markdown)
             output_path = Path(command[command.index("-o") + 1])
             output_path.write_bytes(b"pdf-content")
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -507,6 +512,37 @@ class ReportCitationDetailApiTests(TestCase):
             css_text = css_path.read_text(encoding="utf-8")
             self.assertIn("size: A4", css_text)
             self.assertIn("table-layout: fixed", css_text)
+
+    def test_export_renumbers_citations_and_keeps_reproduction_code_inside_list_item(self):
+        self.citation.index_number = 3
+        self.citation.save(update_fields=["index_number"])
+        Citation.objects.create(
+            report=self.report,
+            index_number=9,
+            source_url="",
+            source_title="结构化数据",
+            cited_text_snippet="结构化数据摘要",
+            reproduction_code="print('before')\n```text\nnested fence\n```\nprint('after')",
+        )
+        self.report.content_markdown = "# 报告\n\n来源引用[@EXAMPLE_SOURCE]，数据引用[@STRUCTURED_DATA]。"
+        self.report.save(update_fields=["content_markdown"])
+
+        with tempfile.TemporaryDirectory() as tmpdir, override_settings(REPORT_EXPORT_ROOT=tmpdir):
+            success, message, data = export_report_file(self.report.id, "md", "full")
+            self.assertTrue(success, message)
+
+            run_export_job(int(data["export_id"]))
+
+            export_record = get_export_record(int(data["export_id"]))
+            markdown_text = (Path(tmpdir) / export_record["storage_path"]).read_text(encoding="utf-8")
+            self.assertIn(f"1. [{self.citation.source_title}]({self.citation.source_url})", markdown_text)
+            self.assertIn("2. 结构化数据", markdown_text)
+            self.assertNotIn("3. [示例来源]", markdown_text)
+            self.assertNotIn("@example_source", markdown_text)
+            self.assertNotIn("@structured_data", markdown_text)
+            self.assertIn("   - 复现代码：\n     ````python", markdown_text)
+            self.assertIn("     ```text", markdown_text)
+            self.assertIn("     ````", markdown_text)
 
     def test_export_api_runs_job_synchronously(self):
         def fake_run(command, **kwargs):

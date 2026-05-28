@@ -82,8 +82,9 @@ def build_markdown_document(
 ) -> str:
     content = get_report_content(report, report_mode)
     citations = _export_citations(report)
+    citation_numbers = _citation_number_map(citations)
     if render_citation_marks:
-        content = _render_citation_marks_as_superscript(content, citations)
+        content = _render_citation_marks_as_superscript(content, citations, citation_numbers)
     parts = [
         f"# {report.title}",
         "",
@@ -95,21 +96,20 @@ def build_markdown_document(
     if citations:
         parts.extend(["", "---", "", "## 引用来源", ""])
         for index, item in enumerate(citations):
-            number = item["index_number"] if item["index_number"] > 0 else index + 1
-            key = f" @{item['cite_key']}" if item["cite_key"] else ""
+            number = citation_numbers[index]
             anchor = f"<a id=\"{_citation_anchor_id(number)}\"></a>" if render_citation_marks else ""
             source = (
                 f"[{item['source_title']}]({item['source_url']})"
                 if item["source_url"] else item["source_title"]
             )
-            parts.append(f"{number}. {anchor}{source}{key}")
+            parts.append(f"{number}. {anchor}{source}")
 
             source_meta = [item["source_platform"], item["source_type"]]
             source_meta = [value for value in source_meta if value]
             if source_meta:
                 parts.append(f"   - 来源：{' / '.join(source_meta)}")
             if not item["source_url"] and item["reproduction_code"]:
-                parts.extend(["   - 复现代码：", "```python", item["reproduction_code"], "```"])
+                parts.extend(_format_reproduction_code_markdown(item["reproduction_code"]))
 
     return "\n".join(part for part in parts if part is not None).strip() + "\n"
 
@@ -202,7 +202,7 @@ def _convert_markdown_with_pandoc(markdown_text: str, output_path: Path, output_
         "pandoc",
         str(markdown_path),
         "-f",
-        "gfm",
+        "gfm+raw_html",
         "-o",
         str(output_path),
     ]
@@ -247,8 +247,18 @@ html {
 
 body {
   color: #111827;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
+  font-family: "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", "PingFang SC", "SimSun", sans-serif;
   line-height: 1.65;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  break-after: avoid;
+  font-weight: 650;
 }
 
 table {
@@ -284,12 +294,21 @@ svg {
 }
 
 pre {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 4pt;
+  font-family: "Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 8.5pt;
+  line-height: 1.45;
+  padding: 7pt;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 code {
+  font-family: "Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 0.9em;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -300,6 +319,9 @@ sup {
   vertical-align: super;
 }
 
+.citation-link,
+.citation-link:visited,
+.citation-link sup,
 sup a,
 a sup {
   color: inherit;
@@ -341,6 +363,21 @@ def _encode_uri(value: str) -> str:
     return quote(value, safe=":/?#[]@!$&'()*+,;=%")
 
 
+def _format_reproduction_code_markdown(code: str) -> list[str]:
+    fence = _markdown_fence_for_code(code)
+    lines = ["   - 复现代码：", f"     {fence}python"]
+    lines.extend(f"     {line}" if line else "     " for line in str(code or "").splitlines())
+    lines.append(f"     {fence}")
+    return lines
+
+
+def _markdown_fence_for_code(code: str) -> str:
+    longest_run = 0
+    for match in re.finditer(r"`+", str(code or "")):
+        longest_run = max(longest_run, len(match.group(0)))
+    return "`" * max(3, longest_run + 1)
+
+
 def _export_citations(report: Report) -> list[dict[str, Any]]:
     rows = list(
         report.citations.order_by("index_number").values(
@@ -355,7 +392,7 @@ def _export_citations(report: Report) -> list[dict[str, Any]]:
     from reports.interface.report_interface import _enrich_citations_from_state
 
     enriched_rows = _enrich_citations_from_state(report, rows)
-    return [
+    citations = [
         {
             "index_number": int(item.get("index_number") or 0),
             "cite_key": str(item.get("cite_key") or "").strip(),
@@ -367,19 +404,30 @@ def _export_citations(report: Report) -> list[dict[str, Any]]:
         }
         for item in enriched_rows
     ]
+    return _dedupe_export_citations(citations)
+
+
+def _dedupe_export_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for citation in citations:
+        key = _normalize_cite_key(citation.get("cite_key"))
+        url = str(citation.get("source_url") or "").strip().lower()
+        title = re.sub(r"\s+", " ", str(citation.get("source_title") or "").strip()).lower()
+        identity = (key, url, title)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append(citation)
+    return result
 
 
 def _normalize_cite_key(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
-def _citation_number(citation: dict[str, Any], fallback_index: int) -> int:
-    number = citation.get("index_number")
-    try:
-        number = int(number)
-    except (TypeError, ValueError):
-        number = 0
-    return number if number > 0 else fallback_index + 1
+def _citation_number_map(citations: list[dict[str, Any]]) -> list[int]:
+    return [index + 1 for index, _citation in enumerate(citations)]
 
 
 def _compact_citation_numbers(numbers: list[int]) -> str:
@@ -410,12 +458,20 @@ def _citation_anchor_id(number: int) -> str:
 
 
 def _citation_superscript_link(label: str, target_number: int) -> str:
-    return f"[<sup>&#91;{label}&#93;</sup>](#{_citation_anchor_id(target_number)})"
+    return (
+        f"<a class=\"citation-link\" href=\"#{_citation_anchor_id(target_number)}\">"
+        f"<sup>&#91;{label}&#93;</sup></a>"
+    )
 
 
-def _render_citation_marks_as_superscript(markdown_text: str, citations: list[dict[str, Any]]) -> str:
+def _render_citation_marks_as_superscript(
+    markdown_text: str,
+    citations: list[dict[str, Any]],
+    citation_numbers: list[int] | None = None,
+) -> str:
+    citation_numbers = citation_numbers or _citation_number_map(citations)
     by_key = {
-        _normalize_cite_key(citation.get("cite_key")): _citation_number(citation, index)
+        _normalize_cite_key(citation.get("cite_key")): citation_numbers[index]
         for index, citation in enumerate(citations)
         if _normalize_cite_key(citation.get("cite_key"))
     }
@@ -457,7 +513,6 @@ def _build_citations_html(citations: list[dict[str, Any]]) -> str:
             )
         else:
             title = _escape_html(citation["source_title"])
-        key = f" <code>@{_escape_html(citation['cite_key'])}</code>" if citation["cite_key"] else ""
         meta = " / ".join(
             _escape_html(value)
             for value in [citation["source_platform"], citation["source_type"]]
@@ -468,5 +523,5 @@ def _build_citations_html(citations: list[dict[str, Any]]) -> str:
             f"<pre><code>{_escape_html(citation['reproduction_code'])}</code></pre>"
             if not citation["source_url"] and citation["reproduction_code"] else ""
         )
-        items.append(f"<li>{title}{key}{meta_html}{code_html}</li>")
+        items.append(f"<li>{title}{meta_html}{code_html}</li>")
     return f"<hr/><h2>引用来源</h2><ol>{''.join(items)}</ol>"
