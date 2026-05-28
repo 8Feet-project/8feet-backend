@@ -244,14 +244,52 @@ def _write_docx_reference_doc(output_path: Path) -> Path:
         if size_pt is not None:
             style.font.size = Pt(size_pt)
         rpr = style.element.get_or_add_rPr()
+        apply_rfonts(rpr, western_font, east_asian_font)
+
+    def apply_rfonts(rpr, western_font: str, east_asian_font: str) -> None:
         rfonts = rpr.rFonts
         if rfonts is None:
             rfonts = OxmlElement("w:rFonts")
             rpr.append(rfonts)
+        for attr in ("asciiTheme", "hAnsiTheme", "eastAsiaTheme", "cstheme"):
+            rfonts.attrib.pop(qn(f"w:{attr}"), None)
         rfonts.set(qn("w:ascii"), western_font)
         rfonts.set(qn("w:hAnsi"), western_font)
         rfonts.set(qn("w:eastAsia"), east_asian_font)
         rfonts.set(qn("w:cs"), western_font)
+
+    def apply_default_font(document, western_font: str, east_asian_font: str) -> None:
+        styles_element = document.styles.element
+        doc_defaults = styles_element.find(qn("w:docDefaults"))
+        if doc_defaults is None:
+            doc_defaults = OxmlElement("w:docDefaults")
+            styles_element.insert(0, doc_defaults)
+        rpr_default = doc_defaults.find(qn("w:rPrDefault"))
+        if rpr_default is None:
+            rpr_default = OxmlElement("w:rPrDefault")
+            doc_defaults.insert(0, rpr_default)
+        rpr = rpr_default.find(qn("w:rPr"))
+        if rpr is None:
+            rpr = OxmlElement("w:rPr")
+            rpr_default.insert(0, rpr)
+        apply_rfonts(rpr, western_font, east_asian_font)
+
+    def apply_theme_fonts(document, western_font: str, east_asian_font: str) -> None:
+        theme_part = document.part.part_related_by(
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"
+        )
+        namespace = "http://schemas.openxmlformats.org/drawingml/2006/main"
+        for font_scheme in theme_part.element.findall(f".//{{{namespace}}}fontScheme"):
+            for font_group_name in ("majorFont", "minorFont"):
+                font_group = font_scheme.find(f"{{{namespace}}}{font_group_name}")
+                if font_group is None:
+                    continue
+                latin = font_group.find(f"{{{namespace}}}latin")
+                if latin is not None:
+                    latin.set("typeface", western_font)
+                ea = font_group.find(f"{{{namespace}}}ea")
+                if ea is not None:
+                    ea.set("typeface", east_asian_font)
 
     reference_doc_path = output_path.with_suffix(".reference.docx")
     document = Document()
@@ -260,6 +298,9 @@ def _write_docx_reference_doc(output_path: Path) -> Path:
     body_east_asian_font = "Microsoft YaHei"
     code_western_font = "Consolas"
     code_east_asian_font = "Microsoft YaHei"
+
+    apply_default_font(document, body_western_font, body_east_asian_font)
+    apply_theme_fonts(document, body_western_font, body_east_asian_font)
 
     for style_name, size_pt in [
         ("Normal", 11),

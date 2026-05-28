@@ -1,6 +1,8 @@
 import jwt
 import subprocess
 import tempfile
+import zipfile
+from xml.etree import ElementTree
 from pathlib import Path
 
 from django.conf import settings
@@ -458,6 +460,22 @@ class ReportCitationDetailApiTests(TestCase):
             reference_doc_path = Path(command[command.index("--reference-doc") + 1])
             self.assertEqual(reference_doc_path.suffix, ".docx")
             self.assertTrue(reference_doc_path.exists())
+            with zipfile.ZipFile(reference_doc_path) as reference_doc:
+                styles = ElementTree.fromstring(reference_doc.read("word/styles.xml"))
+                theme = ElementTree.fromstring(reference_doc.read("word/theme/theme1.xml"))
+            word_ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            drawing_ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+            for style_id in ("Heading2", "Heading3"):
+                rfonts = styles.find(f".//w:style[@w:styleId='{style_id}']/w:rPr/w:rFonts", word_ns)
+                self.assertIsNotNone(rfonts)
+                self.assertEqual(rfonts.get(f"{{{word_ns['w']}}}eastAsia"), "Microsoft YaHei")
+                self.assertIsNone(rfonts.get(f"{{{word_ns['w']}}}eastAsiaTheme"))
+                self.assertIsNone(rfonts.get(f"{{{word_ns['w']}}}hAnsiTheme"))
+            default_fonts = styles.find(".//w:docDefaults/w:rPrDefault/w:rPr/w:rFonts", word_ns)
+            self.assertIsNotNone(default_fonts)
+            self.assertEqual(default_fonts.get(f"{{{word_ns['w']}}}eastAsia"), "Microsoft YaHei")
+            for path in (".//a:majorFont/a:ea", ".//a:minorFont/a:ea"):
+                self.assertEqual(theme.find(path, drawing_ns).get("typeface"), "Microsoft YaHei")
             self.assertNotIn("--pdf-engine=weasyprint", command)
 
     def test_pdf_export_renders_citation_marks_as_superscript_for_pandoc(self):
