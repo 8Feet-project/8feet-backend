@@ -454,6 +454,10 @@ class ReportCitationDetailApiTests(TestCase):
             self.assertEqual(command[0], "pandoc")
             self.assertIn("-f", command)
             self.assertIn("gfm+raw_html", command)
+            self.assertIn("--reference-doc", command)
+            reference_doc_path = Path(command[command.index("--reference-doc") + 1])
+            self.assertEqual(reference_doc_path.suffix, ".docx")
+            self.assertTrue(reference_doc_path.exists())
             self.assertNotIn("--pdf-engine=weasyprint", command)
 
     def test_pdf_export_renders_citation_marks_as_superscript_for_pandoc(self):

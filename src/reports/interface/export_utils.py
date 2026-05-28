@@ -201,6 +201,9 @@ def _convert_markdown_with_pandoc(markdown_text: str, output_path: Path, output_
         "-o",
         str(output_path),
     ]
+    if output_format == "docx":
+        reference_doc_path = _write_docx_reference_doc(output_path)
+        command.extend(["--reference-doc", str(reference_doc_path)])
     if output_format == "pdf":
         css_path = _write_pdf_print_css(output_path)
         command.extend(["--pdf-engine=weasyprint", "--css", str(css_path)])
@@ -221,6 +224,75 @@ def _convert_markdown_with_pandoc(markdown_text: str, output_path: Path, output_
         if detail:
             message = f"{message}: {detail}"
         raise RuntimeError(message) from exc
+
+
+def _write_docx_reference_doc(output_path: Path) -> Path:
+    from docx import Document
+    from docx.enum.style import WD_STYLE_TYPE
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+
+    def ensure_style(document, name: str, style_type: WD_STYLE_TYPE):
+        try:
+            return document.styles[name]
+        except KeyError:
+            return document.styles.add_style(name, style_type)
+
+    def apply_font(style, western_font: str, east_asian_font: str, size_pt: float | None = None) -> None:
+        style.font.name = western_font
+        if size_pt is not None:
+            style.font.size = Pt(size_pt)
+        rpr = style.element.get_or_add_rPr()
+        rfonts = rpr.rFonts
+        if rfonts is None:
+            rfonts = OxmlElement("w:rFonts")
+            rpr.append(rfonts)
+        rfonts.set(qn("w:ascii"), western_font)
+        rfonts.set(qn("w:hAnsi"), western_font)
+        rfonts.set(qn("w:eastAsia"), east_asian_font)
+        rfonts.set(qn("w:cs"), western_font)
+
+    reference_doc_path = output_path.with_suffix(".reference.docx")
+    document = Document()
+
+    body_western_font = "Arial"
+    body_east_asian_font = "Microsoft YaHei"
+    code_western_font = "Consolas"
+    code_east_asian_font = "Microsoft YaHei"
+
+    for style_name, size_pt in [
+        ("Normal", 11),
+        ("Body Text", 11),
+        ("Block Text", 11),
+        ("Quote", 11),
+        ("List Paragraph", 11),
+        ("Hyperlink", 11),
+        ("Title", 18),
+        ("Heading 1", 16),
+        ("Heading 2", 14),
+        ("Heading 3", 13),
+        ("Heading 4", 12),
+        ("Heading 5", 12),
+        ("Heading 6", 12),
+    ]:
+        try:
+            apply_font(document.styles[style_name], body_western_font, body_east_asian_font, size_pt)
+        except KeyError:
+            continue
+
+    for style_name, style_type in [
+        ("Source Code", WD_STYLE_TYPE.PARAGRAPH),
+        ("Code", WD_STYLE_TYPE.CHARACTER),
+        ("Verbatim Char", WD_STYLE_TYPE.CHARACTER),
+    ]:
+        apply_font(ensure_style(document, style_name, style_type), code_western_font, code_east_asian_font, 9)
+
+    document.add_paragraph("reference doc", style="Normal")
+    document.add_heading("reference heading", level=1)
+    document.add_paragraph("reference code", style="Source Code")
+    document.save(reference_doc_path)
+    return reference_doc_path
 
 
 def _write_pdf_print_css(output_path: Path) -> Path:
