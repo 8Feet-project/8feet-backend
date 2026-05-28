@@ -104,10 +104,6 @@ def build_markdown_document(
             )
             parts.append(f"{number}. {anchor}{source}")
 
-            source_meta = [item["source_platform"], item["source_type"]]
-            source_meta = [value for value in source_meta if value]
-            if source_meta:
-                parts.append(f"   - 来源：{' / '.join(source_meta)}")
             if not item["source_url"] and item["reproduction_code"]:
                 parts.extend(_format_reproduction_code_markdown(item["reproduction_code"]))
 
@@ -157,7 +153,6 @@ def export_html(report: Report, report_mode: str = "full") -> str:
         "  li { margin-bottom: 0.35em; }\n"
         "  a { color: #2563eb; text-decoration: none; }\n"
         "  a:hover { text-decoration: underline; }\n"
-        "  .citation-meta { color: #64748b; font-size: 0.85rem; }\n"
         "  pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; overflow-x: auto; padding: 0.75rem; }\n"
         "  @media print { body { margin: 0; } }\n"
         "</style>\n"
@@ -365,9 +360,9 @@ def _encode_uri(value: str) -> str:
 
 def _format_reproduction_code_markdown(code: str) -> list[str]:
     fence = _markdown_fence_for_code(code)
-    lines = ["   - 复现代码：", f"     {fence}python"]
-    lines.extend(f"     {line}" if line else "     " for line in str(code or "").splitlines())
-    lines.append(f"     {fence}")
+    lines = ["", "    复现代码：", "", f"    {fence}python"]
+    lines.extend(f"    {line}" if line else "    " for line in str(code or "").splitlines())
+    lines.append(f"    {fence}")
     return lines
 
 
@@ -513,15 +508,9 @@ def _build_citations_html(citations: list[dict[str, Any]]) -> str:
             )
         else:
             title = _escape_html(citation["source_title"])
-        meta = " / ".join(
-            _escape_html(value)
-            for value in [citation["source_platform"], citation["source_type"]]
-            if value
-        )
-        meta_html = f"<div class=\"citation-meta\">{meta}</div>" if meta else ""
         code_html = (
             f"<pre><code>{_escape_html(citation['reproduction_code'])}</code></pre>"
             if not citation["source_url"] and citation["reproduction_code"] else ""
         )
-        items.append(f"<li>{title}{meta_html}{code_html}</li>")
+        items.append(f"<li>{title}{code_html}</li>")
     return f"<hr/><h2>引用来源</h2><ol>{''.join(items)}</ol>"

@@ -400,7 +400,7 @@ class ReportCitationDetailApiTests(TestCase):
             markdown_text = markdown_path.read_text(encoding="utf-8")
             self.assertIn("1. [线程来源](https://example.com/thread-source)", markdown_text)
             self.assertNotIn("@thread_source", markdown_text)
-            self.assertIn("   - 来源：example.com", markdown_text)
+            self.assertNotIn("来源：example.com", markdown_text)
 
     def test_docx_export_renders_citation_marks_as_superscript_for_pandoc(self):
         Citation.objects.create(
@@ -540,9 +540,9 @@ class ReportCitationDetailApiTests(TestCase):
             self.assertNotIn("3. [示例来源]", markdown_text)
             self.assertNotIn("@example_source", markdown_text)
             self.assertNotIn("@structured_data", markdown_text)
-            self.assertIn("   - 复现代码：\n     ````python", markdown_text)
-            self.assertIn("     ```text", markdown_text)
-            self.assertIn("     ````", markdown_text)
+            self.assertIn("\n    复现代码：\n\n    ````python", markdown_text)
+            self.assertIn("    ```text", markdown_text)
+            self.assertIn("    ````", markdown_text)
 
     def test_export_api_runs_job_synchronously(self):
         def fake_run(command, **kwargs):
