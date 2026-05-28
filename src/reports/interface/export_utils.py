@@ -227,6 +227,8 @@ def _convert_markdown_with_pandoc(markdown_text: str, output_path: Path, output_
 
 
 def _write_docx_reference_doc(output_path: Path) -> Path:
+    from xml.etree import ElementTree
+
     from docx import Document
     from docx.enum.style import WD_STYLE_TYPE
     from docx.oxml import OxmlElement
@@ -279,7 +281,8 @@ def _write_docx_reference_doc(output_path: Path) -> Path:
             "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"
         )
         namespace = "http://schemas.openxmlformats.org/drawingml/2006/main"
-        for font_scheme in theme_part.element.findall(f".//{{{namespace}}}fontScheme"):
+        theme_root = ElementTree.fromstring(theme_part.blob)
+        for font_scheme in theme_root.findall(f".//{{{namespace}}}fontScheme"):
             for font_group_name in ("majorFont", "minorFont"):
                 font_group = font_scheme.find(f"{{{namespace}}}{font_group_name}")
                 if font_group is None:
@@ -290,6 +293,7 @@ def _write_docx_reference_doc(output_path: Path) -> Path:
                 ea = font_group.find(f"{{{namespace}}}ea")
                 if ea is not None:
                     ea.set("typeface", east_asian_font)
+        theme_part._blob = ElementTree.tostring(theme_root, encoding="UTF-8", xml_declaration=True)
 
     reference_doc_path = output_path.with_suffix(".reference.docx")
     document = Document()
