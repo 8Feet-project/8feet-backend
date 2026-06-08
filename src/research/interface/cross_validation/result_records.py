@@ -75,19 +75,14 @@ def _persist_cross_success(
                 final_citations,
                 brief_output=brief_output,
             )
-        task_progress = dict(task.progress or {})
+        task_progress = dict(getattr(task, "progress", {}) or {})
         task_progress.update({
             "searching": 100,
             "analyzing": 100,
             "report": 100,
             "stage": STATUS_COMPLETED,
         })
-        ResearchTask.objects.filter(pk=task.id).update(
-            status=STATUS_COMPLETED,
-            progress=json_safe(task_progress),
-        )
-        task.status = STATUS_COMPLETED
-        task.progress = task_progress
+        _mark_parent_task_completed(task, task_progress)
 
         _update_cross_log(
             task,
@@ -165,6 +160,16 @@ def _cross_report_citations(
         if str(item.get("cite_key") or "").strip().lower() not in prioritized_keys
     )
     return prioritized or citations
+
+
+def _mark_parent_task_completed(task: ResearchTask, task_progress: dict[str, Any]) -> None:
+    if isinstance(task, ResearchTask):
+        ResearchTask.objects.filter(pk=task.id).update(
+            status=STATUS_COMPLETED,
+            progress=json_safe(task_progress),
+        )
+    task.status = STATUS_COMPLETED
+    task.progress = task_progress
 
 
 def _model_result_citations(result: dict[str, Any]) -> list[dict[str, Any]]:
