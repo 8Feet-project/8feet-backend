@@ -34,37 +34,6 @@ def build_cross_validation_base_prompt(task: ResearchTask) -> str:
     )
 
 
-def build_cross_model_research_prompt(task: ResearchTask, base_prompt: str) -> str:
-    base_text = base_prompt.strip()
-    object_contract = object_type_research_requirements(getattr(task, "object_type", ""))
-    report_contract = report_format_requirements(
-        "/mnt/user-data/outputs/model_research_report.md",
-        "/mnt/user-data/outputs/model_research_report_brief.md",
-    )
-    citation_contract = citation_discipline_requirements()
-    object_contract_block = ""
-    if "对象类型专项调研框架" not in base_text:
-        object_contract_block = (
-            "对象类型专项调研框架如下，必须优先覆盖后再补充通用商业分析维度:\n"
-            f"{object_contract}\n\n"
-        )
-    return (
-        "你现在是多模型交叉验证中的一个独立调研线程。"
-        "请不要参考其他模型的输出；本流程固定自动推进。"
-        "请独立完成完整调研，分别写入详细版与简版 Markdown 报告文件，并调用 present_report 同时展示两份报告。\n\n"
-        "报告文件路径建议使用:\n"
-        "- /mnt/user-data/outputs/model_research_report.md\n"
-        "- /mnt/user-data/outputs/model_research_report_brief.md\n\n"
-        f"{citation_contract}\n"
-        f"{report_contract}\n"
-        "本独立线程必须使用上方 model_research_report.md 和 model_research_report_brief.md 路径；"
-        "原始任务里若出现其他报告路径，仅作为主任务默认要求，不适用于本线程。\n\n"
-        f"{object_contract_block}"
-        "原始调研任务如下:\n"
-        f"{base_text}"
-    )
-
-
 def build_cross_integrator_system_message() -> str:
     report_contract = report_format_requirements(
         "/mnt/user-data/outputs/cross_validation_report.md",

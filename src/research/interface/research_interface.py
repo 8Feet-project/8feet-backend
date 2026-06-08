@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.utils import timezone
 
 from analytics.models.logs import OperationLog
@@ -22,10 +23,12 @@ from research.models import (
     ResearchConversationMessage,
     ResearchTask,
     SESSION_STATUS_CANCELLED,
+    SESSION_STATUS_COMPLETED,
     STATUS_CANCELLED,
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_PENDING,
+    STATUS_SEARCHING,
     STATUS_WAITING_USER,
 )
 from research.models.task_step_log import TaskStepLog
@@ -194,6 +197,12 @@ def create_research_task(
     if not normalized_object_type:
         return (False, "object_type 无效", None)
 
+    effective_search_params = search_params or {}
+    cross_validation_enabled = _coerce_bool(effective_search_params.get("enable_cross_validation"))
+    cross_model_ids = _cross_model_ids_from_params(effective_search_params)
+    if cross_validation_enabled and len(cross_model_ids) < 2:
+        return (False, "多模型交叉验证至少需要 2 个模型", None)
+
     selected_model_id = llm_config_id or model_id
     ok, message, config, _ = resolve_user_model_config(
         user,
@@ -203,39 +212,59 @@ def create_research_task(
     if not ok:
         return (False, message, None)
 
+    task_status = STATUS_SEARCHING if cross_validation_enabled and len(cross_model_ids) >= 2 else STATUS_PENDING
+    task_progress = {
+        "searching": 0,
+        "analyzing": 0,
+        "report": 0,
+        "stage": task_status,
+        "event_count": 0,
+    }
+    if cross_validation_enabled:
+        task_progress["cross_validation"] = {
+            "status": "queued",
+            "model_count": len(cross_model_ids),
+        }
+
     task = ResearchTask.objects.create(
         user=user,
         title=title,
         object_name=object_name,
         object_type=normalized_object_type,
         llm_config=config,
-        search_params=search_params or {},
-        status=STATUS_PENDING,
-        progress={
-            "searching": 0,
-            "analyzing": 0,
-            "report": 0,
-            "stage": STATUS_PENDING,
-            "event_count": 0,
-        },
+        search_params=effective_search_params,
+        status=task_status,
+        progress=task_progress,
     )
 
     runtime, runtime_error = _safe_research_runtime()
 
-    ResearchConversation.objects.create(
-        task=task,
-        thread_id=str(uuid4()),
-        system_message=(
-            runtime.build_research_system_message_for_user(user)
-            if runtime else _fallback_system_message()
+    conversation_defaults = {
+        "task": task,
+        "thread_id": str(uuid4()),
+        "system_message": (
+            runtime.build_research_system_message_without_step_approval()
+            if cross_validation_enabled and runtime
+            else runtime.build_research_system_message_for_user(user)
+            if runtime
+            else _fallback_system_message()
         ),
-    )
+    }
+    if cross_validation_enabled:
+        conversation_defaults["status"] = SESSION_STATUS_COMPLETED
+    ResearchConversation.objects.create(**conversation_defaults)
 
     TaskStepLog.objects.create(
         task=task,
         step_name="任务已创建",
         step_status="COMPLETED",
-        detail={"message": f"调研任务 [{title}] 创建成功，准备启动调研链路"},
+        detail={
+            "message": (
+                f"交叉验证任务组 [{title}] 创建成功，准备启动多模型线程"
+                if cross_validation_enabled
+                else f"调研任务 [{title}] 创建成功，准备启动调研链路"
+            )
+        },
     )
 
     _log_task_operation(
@@ -245,6 +274,38 @@ def create_research_task(
         user_action="创建调研任务",
         prompt_raw=str(search_params or {}),
     )
+
+    if cross_validation_enabled:
+        def _enqueue_cross_validation_group() -> None:
+            from research.interface.cross_validation_runtime import enqueue_cross_validation_run
+
+            success, message, _run_id = enqueue_cross_validation_run(
+                task.id,
+                requested_model_ids=cross_model_ids,
+                run_metadata={"source": "task_create"},
+                allow_incomplete_parent=True,
+            )
+            if not success:
+                ResearchTask.objects.filter(pk=task.id).update(
+                    status=STATUS_FAILED,
+                    progress={
+                        **(task.progress or {}),
+                        "stage": STATUS_FAILED,
+                        "cross_validation": {
+                            "status": "failed",
+                            "error": message or "启动多模型交叉验证失败",
+                        },
+                    },
+                )
+                TaskStepLog.objects.create(
+                    task=task,
+                    step_name="多模型交叉验证启动失败",
+                    step_status="FAILED",
+                    detail={"error": message or "启动多模型交叉验证失败"},
+                )
+
+        transaction.on_commit(_enqueue_cross_validation_group)
+        return (True, None, task.id)
 
     if runtime is None:
         TaskStepLog.objects.create(
@@ -287,6 +348,33 @@ def create_research_task(
         return (False, message, None)
 
     return (True, None, task.id)
+
+
+def _coerce_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _coerce_list(value) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, dict):
+        return _coerce_list(value.get("model_ids") or value.get("models"))
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    return [str(value).strip()]
+
+
+def _cross_model_ids_from_params(params: dict) -> list[str]:
+    models = params.get("multi_model_ids")
+    if models in (None, ""):
+        cross_params = params.get("cross_validation")
+        if isinstance(cross_params, dict):
+            models = cross_params.get("model_ids") or cross_params.get("models")
+    return _coerce_list(models)
 
 
 def get_task_detail(task_id: int, user_id: int) -> Optional[dict]:

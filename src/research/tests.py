@@ -33,7 +33,6 @@ from research.interface.cross_validation_runtime import (
     build_cross_validation_base_prompt,
     build_cross_integrator_system_message,
     build_cross_integrator_prompt,
-    build_cross_model_research_prompt,
     enqueue_cross_validation_run,
 )
 from research.interface.prompt_contracts import (
@@ -54,7 +53,7 @@ from research.interface.research_runtime import (
     _resolve_max_turns,
 )
 from research.models import ResearchConversation, ResearchTask, ScrapedContent, TaskStepLog
-from research.interface.research_interface import infer_object_type, respond_to_step
+from research.interface.research_interface import create_research_task, infer_object_type, respond_to_step
 from research.api.research_api import (
     _agent_step_status,
     _attach_subagent_workflows,
@@ -64,12 +63,14 @@ from research.api.research_api import (
     _dsml_report_tool_names,
     _enrich_report_links,
     _extract_subagent_workflows,
+    _is_cross_actor_detail_log,
     _is_hidden_workflow_log,
     _pair_workflow_nodes,
     _progress_model,
     _split_report_message_nodes,
     _task_reference_items,
     _tool_display,
+    _workflow_logs_for_task,
     _workflow_node_from_log,
 )
 
@@ -589,6 +590,172 @@ class ResearchRealtimeReferenceTests(TestCase):
         self.assertIn("@misc{akshare_key", detail["references_bibtex"])
         self.assertIn("@misc{web_key", detail["references_bibtex"])
 
+    def test_completed_primary_task_auto_enqueues_requested_cross_validation(self):
+        user = get_user_model().objects.create_user(username="research-cross-auto-user")
+        task = ResearchTask.objects.create(
+            user=user,
+            title="交叉验证自动启动",
+            object_name="Example",
+            object_type="COMPANY",
+            search_params={
+                "enable_cross_validation": True,
+                "multi_model_ids": ["101", "102"],
+            },
+            status="ANALYZING",
+        )
+        conversation = ResearchConversation.objects.create(task=task, thread_id="thread-cross-auto")
+
+        with patch.object(research_runtime, "resolve_effective_output", return_value="最终报告"):
+            with patch.object(research_runtime, "log_model_usage"):
+                with patch(
+                    "research.interface.cross_validation_runtime.enqueue_cross_validation_run",
+                    return_value=(True, None, "run-auto"),
+                ) as enqueue:
+                    with self.captureOnCommitCallbacks(execute=True):
+                        research_runtime._persist_success(
+                            task=task,
+                            conversation=conversation,
+                            thread=SimpleNamespace(history=[], state={}),
+                            prompt="prompt",
+                            final_output="最终报告",
+                            create_report=True,
+                            run_number=1,
+                            previous_history_count=0,
+                            previous_presented_report_count=0,
+                            previous_report_row_count=0,
+                            llm_config=None,
+                            latency_ms=1.0,
+                        )
+
+        enqueue.assert_called_once_with(
+            task.id,
+            run_metadata={"source": "auto_after_primary_completion"},
+        )
+
+    def test_create_cross_validation_task_starts_group_without_primary_research_thread(self):
+        user = get_user_model().objects.create_user(username="research-cross-create-user")
+        primary_config = LLMConfig.objects.create(
+            name="primary-model",
+            provider="Provider",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="secret",
+        )
+        cross_a = LLMConfig.objects.create(
+            name="cross-a",
+            provider="Provider",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="secret",
+        )
+        cross_b = LLMConfig.objects.create(
+            name="cross-b",
+            provider="Provider",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="secret",
+        )
+        runtime = SimpleNamespace(
+            build_research_system_message_without_step_approval=lambda: "cross system",
+            build_research_system_message_for_user=lambda _user: "primary system",
+            build_initial_prompt=lambda _task: "primary prompt",
+            enqueue_task_run=lambda *args, **kwargs: (True, None),
+        )
+
+        with patch("research.interface.research_interface._safe_research_runtime", return_value=(runtime, None)):
+            with patch("research.interface.research_interface.resolve_user_model_config", return_value=(True, None, primary_config, {})):
+                with patch.object(runtime, "enqueue_task_run", return_value=(True, None)) as enqueue_primary:
+                    with patch(
+                        "research.interface.cross_validation_runtime.enqueue_cross_validation_run",
+                        return_value=(True, None, "run-create"),
+                    ) as enqueue_cross:
+                        with self.captureOnCommitCallbacks(execute=True):
+                            success, message, task_id = create_research_task(
+                                user_id=user.id,
+                                title="创建即交叉验证",
+                                object_name="Example",
+                                object_type="COMPANY",
+                                model_id=str(primary_config.id),
+                                search_params={
+                                    "enable_cross_validation": True,
+                                    "multi_model_ids": [str(cross_a.id), str(cross_b.id)],
+                                    "auto_advance": True,
+                                },
+                            )
+
+        self.assertTrue(success, message)
+        self.assertIsNone(message)
+        task = ResearchTask.objects.get(pk=task_id)
+        self.assertEqual(task.status, "SEARCHING")
+        self.assertTrue(task.search_params["enable_cross_validation"])
+        self.assertEqual(task.progress["cross_validation"]["status"], "queued")
+        self.assertEqual(task.conversation.status, "COMPLETED")
+        enqueue_primary.assert_not_called()
+        enqueue_cross.assert_called_once_with(
+            task.id,
+            requested_model_ids=[str(cross_a.id), str(cross_b.id)],
+            run_metadata={"source": "task_create"},
+            allow_incomplete_parent=True,
+        )
+
+    def test_create_cross_validation_task_accepts_nested_model_ids(self):
+        user = get_user_model().objects.create_user(username="research-cross-nested-user")
+        primary_config = LLMConfig.objects.create(
+            name="primary-nested-model",
+            provider="Provider",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="secret",
+        )
+        cross_a = LLMConfig.objects.create(
+            name="cross-nested-a",
+            provider="Provider",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="secret",
+        )
+        cross_b = LLMConfig.objects.create(
+            name="cross-nested-b",
+            provider="Provider",
+            api_endpoint="https://example.com/v1",
+            api_key_encrypted="secret",
+        )
+        runtime = SimpleNamespace(
+            build_research_system_message_without_step_approval=lambda: "cross system",
+            build_research_system_message_for_user=lambda _user: "primary system",
+            build_initial_prompt=lambda _task: "primary prompt",
+            enqueue_task_run=lambda *args, **kwargs: (True, None),
+        )
+
+        with patch("research.interface.research_interface._safe_research_runtime", return_value=(runtime, None)):
+            with patch("research.interface.research_interface.resolve_user_model_config", return_value=(True, None, primary_config, {})):
+                with patch.object(runtime, "enqueue_task_run", return_value=(True, None)) as enqueue_primary:
+                    with patch(
+                        "research.interface.cross_validation_runtime.enqueue_cross_validation_run",
+                        return_value=(True, None, "run-nested"),
+                    ) as enqueue_cross:
+                        with self.captureOnCommitCallbacks(execute=True):
+                            success, message, task_id = create_research_task(
+                                user_id=user.id,
+                                title="嵌套模型交叉验证",
+                                object_name="Example",
+                                object_type="COMPANY",
+                                model_id=str(primary_config.id),
+                                search_params={
+                                    "enable_cross_validation": True,
+                                    "cross_validation": {
+                                        "model_ids": [str(cross_a.id), str(cross_b.id)],
+                                    },
+                                },
+                            )
+
+        self.assertTrue(success, message)
+        task = ResearchTask.objects.get(pk=task_id)
+        self.assertEqual(task.status, "SEARCHING")
+        self.assertEqual(task.progress["cross_validation"]["model_count"], 2)
+        enqueue_primary.assert_not_called()
+        enqueue_cross.assert_called_once_with(
+            task.id,
+            requested_model_ids=[str(cross_a.id), str(cross_b.id)],
+            run_metadata={"source": "task_create"},
+            allow_incomplete_parent=True,
+        )
+
     def test_respond_to_step_requeues_approval_response(self):
         user = get_user_model().objects.create_user(username="research-approval-response-user")
         task = ResearchTask.objects.create(
@@ -691,29 +858,11 @@ class ResearchRealtimeReferenceTests(TestCase):
         enqueue.assert_called_once()
 
 
-class CrossValidationRuntimeTests(SimpleTestCase):
+class CrossValidationRuntimeTests(TestCase):
     def test_model_id_list_accepts_json_array_and_comma_text(self):
         self.assertEqual(_coerce_model_id_list('["a", "b"]'), ["a", "b"])
         self.assertEqual(_coerce_model_id_list("a,b, c "), ["a", "b", "c"])
         self.assertEqual(_coerce_model_id_list({"models": ["m1", "m2"]}), ["m1", "m2"])
-
-    def test_cross_model_prompt_requires_independent_presented_report(self):
-        task = SimpleNamespace(title="T", object_name="Acme", object_type="COMPANY")
-        prompt = build_cross_model_research_prompt(task, "base task")
-
-        self.assertIn("独立调研线程", prompt)
-        self.assertIn("对象类型专项调研框架（公司）", prompt)
-        self.assertIn("企业身份与资质", prompt)
-        self.assertIn("/mnt/user-data/outputs/model_research_report.md", prompt)
-        self.assertIn("/mnt/user-data/outputs/model_research_report_brief.md", prompt)
-        self.assertIn("最终报告格式与交付要求", prompt)
-        self.assertIn("## 摘要", prompt)
-        self.assertIn("## 核心结论", prompt)
-        self.assertIn("## 结论与建议", prompt)
-        self.assertIn("引用约束（句句有引用）", prompt)
-        self.assertIn("web_search 只用于发现候选网址", prompt)
-        self.assertIn("brief_report_path", prompt)
-        self.assertIn("present_report", prompt)
 
     def test_cross_validation_base_prompt_is_non_interactive(self):
         task = SimpleNamespace(
@@ -732,6 +881,105 @@ class CrossValidationRuntimeTests(SimpleTestCase):
         self.assertNotIn("request_step_approval", prompt)
         self.assertNotIn("task 工具", prompt)
         self.assertNotIn("子代理分工", prompt)
+
+    def test_cross_model_runtime_events_are_recorded_on_child_task(self):
+        user = get_user_model().objects.create_user(username="cross-model-runtime-user")
+        parent_task = ResearchTask.objects.create(
+            user=user,
+            title="Acme 交叉验证",
+            object_name="Acme",
+            object_type="COMPANY",
+            search_params={"enable_cross_validation": True},
+        )
+        child_task = ResearchTask.objects.create(
+            user=user,
+            parent_task=parent_task,
+            task_role="CROSS_MODEL",
+            title="Acme - model-a 交叉验证",
+            object_name="Acme",
+            object_type="COMPANY",
+            search_params={
+                "auto_advance": True,
+                "enable_cross_validation": True,
+                "cross_validation_child": {
+                    "parent_task_id": parent_task.id,
+                    "cross_validation_run_id": "run-1",
+                    "model": {"model_name": "model-a"},
+                },
+            },
+        )
+        spec = CrossModelSpec(
+            "model-a",
+            "model-a",
+            "env",
+            {"model": "model-a", "api_key": "k", "base_url": "u"},
+            order=1,
+        )
+        recorded_events: list[dict] = []
+        recorded_parent_steps: list[dict] = []
+        child_success_payload = {
+            "child_analysis_result_id": 31,
+            "child_report_id": 41,
+            "child_report_paths": ["/mnt/user-data/outputs/model_research_report.md"],
+        }
+        create_thread_calls: list[dict] = []
+        streamed_prompts: list[str] = []
+
+        class FakeThread:
+            history = []
+            state = {}
+            max_turns = 0
+
+            def stream(self, prompt, on_event=None):
+                streamed_prompts.append(prompt)
+                if on_event:
+                    on_event({
+                        "type": "tool_call",
+                        "name": "web_search",
+                        "args": {"query": "Acme"},
+                        "id": "tool-1",
+                    })
+                yield "模型报告"
+
+        def fake_create_thread(*args, **kwargs):
+            create_thread_calls.append({"args": args, "kwargs": kwargs})
+            return FakeThread()
+
+        with patch.object(cross_orchestrator, "close_old_connections"):
+            with patch.object(cross_orchestrator, "create_thread", side_effect=fake_create_thread):
+                with patch.object(cross_orchestrator, "_create_model", return_value=object()):
+                    with patch.object(cross_orchestrator, "resolve_effective_output", return_value="模型报告"):
+                        with patch.object(cross_orchestrator, "_ensure_report_payloads", return_value=[{"path": "/mnt/user-data/outputs/model_research_report.md"}]):
+                            with patch.object(cross_orchestrator, "_report_paths_from_payloads", return_value=["/mnt/user-data/outputs/model_research_report.md"]):
+                                with patch.object(cross_orchestrator, "_persist_model_child_success", return_value=child_success_payload):
+                                    with patch.object(cross_orchestrator, "_mark_model_child_running"):
+                                        with patch.object(cross_orchestrator, "_record_cross_event_for_task", side_effect=lambda *args, **kwargs: recorded_events.append({"args": args, "kwargs": kwargs})):
+                                            with patch.object(cross_orchestrator, "_record_cross_step", side_effect=lambda *args, **kwargs: recorded_parent_steps.append({"args": args, "kwargs": kwargs})):
+                                                result = cross_orchestrator._run_single_model_thread(
+                                                    task_id=parent_task.id,
+                                                    child_task_id=child_task.id,
+                                                    run_id="run-1",
+                                                    task_payload={"search_params": {}, "model_order": {"model-a": 1}},
+                                                    spec=spec,
+                                                    sandbox_paths=SimpleNamespace(),
+                                                )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(recorded_events[0]["args"][:3], (child_task.id, "run-1", "model:model-a"))
+        self.assertEqual(recorded_events[0]["kwargs"]["group_task_id"], parent_task.id)
+        self.assertEqual([item["args"][0] for item in recorded_parent_steps], [parent_task.id, parent_task.id])
+        self.assertIn("启动模型调研线程", recorded_parent_steps[0]["args"][2])
+        self.assertIn("模型调研完成", recorded_parent_steps[1]["args"][2])
+        create_kwargs = create_thread_calls[0]["kwargs"]
+        self.assertTrue(create_kwargs["include_task"])
+        self.assertTrue(create_kwargs["include_step_approval"])
+        self.assertEqual(
+            create_kwargs["system_message"],
+            research_runtime.build_research_system_message_for_user(user),
+        )
+        child_task.refresh_from_db()
+        self.assertEqual(streamed_prompts[0], research_runtime.build_initial_prompt(child_task))
+        self.assertIn("通过 task 工具分配给子代理", streamed_prompts[0])
 
 
 class CrossValidationIntegratorModelTests(TestCase):
@@ -810,6 +1058,77 @@ class ResearchProgressModelTests(SimpleTestCase):
         self.assertEqual(model["stages"][2]["progress_percent"], 85)
         self.assertEqual(model["percent"], 75)
 
+
+class CrossValidationWorkflowLogTests(TestCase):
+    def test_parent_workflow_hides_cross_actor_details_and_child_keeps_legacy_events(self):
+        user = get_user_model().objects.create_user(username="cross-workflow-log-user")
+        parent = ResearchTask.objects.create(
+            user=user,
+            title="交叉验证父任务",
+            object_name="Acme",
+            object_type="COMPANY",
+            search_params={"enable_cross_validation": True},
+        )
+        child = ResearchTask.objects.create(
+            user=user,
+            parent_task=parent,
+            task_role="CROSS_MODEL",
+            title="model-a 子任务",
+            object_name="Acme",
+            object_type="COMPANY",
+            search_params={
+                "cross_validation_child": {
+                    "parent_task_id": parent.id,
+                    "cross_validation_run_id": "run-1",
+                    "model": {"model_name": "model-a"},
+                },
+            },
+        )
+        TaskStepLog.objects.create(
+            task=parent,
+            step_name="[cross:model-a] 调用工具: web_search",
+            step_status="RUNNING",
+            detail={
+                "cross_validation_run_id": "run-1",
+                "actor": "model:model-a",
+                "event_type": "tool_call",
+                "name": "web_search",
+            },
+        )
+        TaskStepLog.objects.create(
+            task=parent,
+            step_name="[cross:model-a] 模型调研完成",
+            step_status="COMPLETED",
+            detail={
+                "cross_validation_run_id": "run-1",
+                "child_task_id": child.id,
+            },
+        )
+        TaskStepLog.objects.create(
+            task=child,
+            step_name="[cross:model-a] 模型调研启动",
+            step_status="RUNNING",
+            detail={"cross_validation_run_id": "run-1"},
+        )
+
+        parent_logs = [
+            log
+            for log in _workflow_logs_for_task(parent, user.id)
+            if not _is_cross_actor_detail_log(log)
+        ]
+        child_logs = _workflow_logs_for_task(child, user.id)
+
+        self.assertEqual(
+            [log["step_name"] for log in parent_logs],
+            ["[cross:model-a] 模型调研完成"],
+        )
+        self.assertEqual(
+            [log["step_name"] for log in child_logs],
+            ["[cross:model-a] 调用工具: web_search", "[cross:model-a] 模型调研启动"],
+        )
+
+
+class ResearchWorkflowDisplayTests(SimpleTestCase):
     def test_workflow_hides_shell_step_logs(self):
         self.assertTrue(
             _is_hidden_workflow_log(

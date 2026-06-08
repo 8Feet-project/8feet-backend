@@ -8,7 +8,7 @@ from llm_manager.interface.llm_interface import log_model_usage
 from research.interface import research_runtime
 from reports.interface.report_interface import cite_keys_from_markdown, normalize_report_markdown
 from research.interface.thread_codec import json_safe
-from research.models import AnalysisResult, ResearchConversation, ResearchTask, TaskStepLog
+from research.models import AnalysisResult, ResearchConversation, ResearchTask, STATUS_COMPLETED, TaskStepLog
 
 from .artifacts import _latest_report_payload
 from .run_logs import _update_cross_log, _update_cross_progress
@@ -75,6 +75,19 @@ def _persist_cross_success(
                 final_citations,
                 brief_output=brief_output,
             )
+        task_progress = dict(task.progress or {})
+        task_progress.update({
+            "searching": 100,
+            "analyzing": 100,
+            "report": 100,
+            "stage": STATUS_COMPLETED,
+        })
+        ResearchTask.objects.filter(pk=task.id).update(
+            status=STATUS_COMPLETED,
+            progress=json_safe(task_progress),
+        )
+        task.status = STATUS_COMPLETED
+        task.progress = task_progress
 
         _update_cross_log(
             task,

@@ -112,6 +112,7 @@ from research.models import (
     STATUS_PENDING,
     STATUS_SEARCHING,
     STATUS_WAITING_USER,
+    TASK_ROLE_CROSS_MODEL,
     TaskStepLog,
 )
 
@@ -133,6 +134,57 @@ SUMMARY_SECTION_RE = re.compile(
 
 class TaskCancelledError(RuntimeError):
     """任务被用户取消。"""
+
+
+def _cross_validation_requested(task: ResearchTask) -> bool:
+    params = task.search_params if isinstance(task.search_params, dict) else {}
+    if not params:
+        return False
+    enabled = _coerce_bool(params.get("enable_cross_validation"))
+    models = params.get("multi_model_ids")
+    if models in (None, ""):
+        cross_params = params.get("cross_validation")
+        if isinstance(cross_params, dict):
+            models = cross_params.get("model_ids") or cross_params.get("models")
+    return enabled and len(_coerce_list(models)) >= 2
+
+
+def _enqueue_cross_validation_after_commit(task_id: int) -> None:
+    try:
+        from research.interface.cross_validation_runtime import enqueue_cross_validation_run
+
+        success, message, _run_id = enqueue_cross_validation_run(
+            task_id,
+            run_metadata={"source": "auto_after_primary_completion"},
+        )
+        if not success:
+            TaskStepLog.objects.create(
+                task_id=task_id,
+                step_name="多模型交叉验证自动启动失败",
+                step_status="FAILED",
+                detail={"error": message or "启动多模型交叉验证失败"},
+            )
+    except Exception as exc:
+        TaskStepLog.objects.create(
+            task_id=task_id,
+            step_name="多模型交叉验证自动启动失败",
+            step_status="FAILED",
+            detail={"error": str(exc)},
+        )
+
+
+def _schedule_cross_validation_if_requested(task: ResearchTask) -> None:
+    if task.parent_task_id is not None or task.task_role == TASK_ROLE_CROSS_MODEL:
+        return
+    if not _cross_validation_requested(task):
+        return
+    transaction.on_commit(lambda task_id=task.id: _enqueue_cross_validation_after_commit(task_id))
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def build_research_system_message() -> str:
@@ -1580,6 +1632,9 @@ def _persist_success(
             latency_ms=int(latency_ms or 0),
             usage_type="GENERAL" if create_report else "FOLLOWUP",
         )
+
+        if create_report:
+            _schedule_cross_validation_if_requested(task)
 
         _sync_report_followup_answer(run_metadata, effective_output)
 

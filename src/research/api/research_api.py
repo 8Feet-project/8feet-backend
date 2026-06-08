@@ -212,6 +212,50 @@ def _cross_validation_auto_forced(task: ResearchTask) -> bool:
     return TaskStepLog.objects.filter(task=task, step_name=CROSS_VALIDATION_STEP_NAME).exists()
 
 
+def _cross_child_metadata(task: ResearchTask) -> dict[str, Any]:
+    params = task.search_params if isinstance(task.search_params, dict) else {}
+    metadata = params.get("cross_validation_child")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _cross_model_actor_for_child(task: ResearchTask) -> str:
+    metadata = _cross_child_metadata(task)
+    model = metadata.get("model") if isinstance(metadata.get("model"), dict) else {}
+    model_name = str(model.get("model_name") or model.get("model_id") or "").strip()
+    return f"model:{model_name}" if model_name else ""
+
+
+def _workflow_logs_for_task(task: ResearchTask, user_id: int) -> list[dict]:
+    logs = get_task_step_logs(task.id, user_id)
+    child_metadata = _cross_child_metadata(task)
+    parent_task_id = child_metadata.get("parent_task_id")
+    run_id = str(child_metadata.get("cross_validation_run_id") or "").strip()
+    actor = _cross_model_actor_for_child(task)
+    if parent_task_id and run_id and actor:
+        parent_logs = get_task_step_logs(int(parent_task_id), user_id)
+        logs.extend(
+            log
+            for log in parent_logs
+            if _is_legacy_cross_actor_log(log, run_id, actor)
+        )
+    logs.sort(key=lambda item: item.get("created_at") or "")
+    return logs
+
+
+def _is_legacy_cross_actor_log(log: dict[str, Any], run_id: str, actor: str) -> bool:
+    detail = log.get("detail") if isinstance(log.get("detail"), dict) else {}
+    return (
+        str(detail.get("cross_validation_run_id") or "").strip() == run_id
+        and str(detail.get("actor") or "").strip() == actor
+    )
+
+
+def _is_cross_actor_detail_log(log: dict[str, Any]) -> bool:
+    detail = log.get("detail") if isinstance(log.get("detail"), dict) else {}
+    actor = str(detail.get("actor") or "").strip()
+    return actor.startswith("model:") or actor == "integrator"
+
+
 def _latest_pending_step_approval(task_id: int) -> TaskStepLog | None:
     steps = TaskStepLog.objects.filter(
         task_id=task_id,
@@ -1152,7 +1196,7 @@ def create_task(request: HttpRequest):
     return success_api_response({
         "task_id": str(task_id),
         "detected_object_type": _frontend_object_type(task.object_type if task else object_type),
-        "status": "pending",
+        "status": _frontend_status(task.status if task else "PENDING"),
         "next_action": "poll_status",
     })
 
@@ -1342,7 +1386,12 @@ def task_steps(request: HttpRequest, task_id: int):
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
 
     report_payload = _report_payload_for_task(task)
-    logs = [log for log in get_task_step_logs(task_id, request.user.id) if not _is_hidden_workflow_log(log)]
+    logs = [
+        log
+        for log in _workflow_logs_for_task(task, request.user.id)
+        if not _is_hidden_workflow_log(log)
+        and not (task.parent_task_id is None and _is_cross_actor_detail_log(log))
+    ]
     raw_nodes = [_workflow_node_from_log(log, index) for index, log in enumerate(logs)]
     subagent_workflows = _extract_subagent_workflows(raw_nodes)
     _attach_subagent_workflows(raw_nodes, subagent_workflows)

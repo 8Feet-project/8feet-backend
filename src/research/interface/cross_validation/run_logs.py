@@ -13,6 +13,17 @@ from .types import CROSS_VALIDATION_STEP_NAME
 
 
 def _record_cross_event(task_id: int, run_id: str, actor: str, event: dict[str, Any]) -> None:
+    _record_cross_event_for_task(task_id, run_id, actor, event)
+
+
+def _record_cross_event_for_task(
+    log_task_id: int,
+    run_id: str,
+    actor: str,
+    event: dict[str, Any],
+    *,
+    group_task_id: int | None = None,
+) -> None:
     step_name, step_status, detail = research_runtime._event_to_step(event, 1)
     detail = dict(detail or {})
     detail.update(
@@ -22,8 +33,10 @@ def _record_cross_event(task_id: int, run_id: str, actor: str, event: dict[str, 
             "event": json_safe(event),
         }
     )
+    if group_task_id is not None and group_task_id != log_task_id:
+        detail["group_task_id"] = group_task_id
     _record_cross_step(
-        task_id,
+        log_task_id,
         run_id,
         f"[cross:{actor}] {step_name}",
         step_status,

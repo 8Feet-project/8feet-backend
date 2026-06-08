@@ -34,9 +34,11 @@ from research.interface.thread_codec import json_safe, serialize_history, serial
 from research.models import (
     ResearchTask,
     SESSION_STATUS_RUNNING,
+    STATUS_ANALYZING,
     STATUS_CANCELLED,
     STATUS_COMPLETED,
     STATUS_FAILED,
+    STATUS_SEARCHING,
     TaskStepLog,
 )
 
@@ -56,13 +58,13 @@ from .prompts import (
     build_cross_validation_base_prompt,
     build_cross_integrator_prompt,
     build_cross_integrator_system_message,
-    build_cross_model_research_prompt,
 )
 from .result_records import _persist_cross_success
 from .run_logs import (
     _conversation_status,
     _mark_cross_failed,
     _record_cross_event,
+    _record_cross_event_for_task,
     _record_cross_step,
     _update_cross_log,
     _update_cross_progress,
@@ -94,6 +96,7 @@ def enqueue_cross_validation_run(
     prompt: str | None = None,
     run_metadata: dict[str, Any] | None = None,
     allow_env_models: bool = False,
+    allow_incomplete_parent: bool = False,
 ) -> tuple[bool, str | None, str | None]:
     """Start a multi-model cross-validation run for an existing research task."""
     task = (
@@ -108,7 +111,7 @@ def enqueue_cross_validation_run(
         return (False, "多模型交叉验证只能在主任务上启动", None)
     if task.status in {STATUS_CANCELLED, STATUS_FAILED}:
         return (False, "任务状态不允许启动多模型交叉验证", None)
-    if task.status != STATUS_COMPLETED:
+    if task.status != STATUS_COMPLETED and not allow_incomplete_parent:
         return (False, "主任务完成后才能启动多模型交叉验证", None)
     if _conversation_status(task) == SESSION_STATUS_RUNNING:
         return (False, "主任务会话仍在运行，请等待调研完成后再启动多模型交叉验证", None)
@@ -205,12 +208,13 @@ def _run_cross_validation(
             .select_related("user", "llm_config")
             .get(pk=task_id)
         )
+        ResearchTask.objects.filter(pk=task.id).update(status=STATUS_SEARCHING)
+        task.status = STATUS_SEARCHING
         _update_cross_log(task, run_id, status="running")
         _update_cross_progress(task, run_id, "running", model_count=len(specs))
 
         sandbox_paths = research_runtime._resolve_sandbox_paths(task.search_params) or SandboxPaths()
         task_payload = _task_prompt_payload(task)
-        model_prompt = build_cross_model_research_prompt(task, prompt)
         child_tasks = _create_cross_model_child_tasks(task, run_id, specs)
         worker_count = min(len(specs), _cross_worker_count(task.search_params))
         model_results: list[dict[str, Any]] = []
@@ -224,7 +228,6 @@ def _run_cross_validation(
                     run_id,
                     task_payload,
                     spec,
-                    model_prompt,
                     sandbox_paths,
                 )
                 for spec in specs
@@ -248,6 +251,8 @@ def _run_cross_validation(
             sandbox_paths=sandbox_paths,
         )
         latency_ms = round((perf_counter() - started_at) * 1000, 2)
+        ResearchTask.objects.filter(pk=task.id).update(status=STATUS_ANALYZING)
+        task.status = STATUS_ANALYZING
         _persist_cross_success(
             task=task,
             run_id=run_id,
@@ -261,6 +266,7 @@ def _run_cross_validation(
     except Exception as exc:
         task = ResearchTask.objects.filter(pk=task_id).first()
         if task is not None:
+            ResearchTask.objects.filter(pk=task.id).update(status=STATUS_FAILED)
             _mark_cross_failed(task, run_id, str(exc))
     finally:
         close_old_connections()
@@ -272,7 +278,6 @@ def _run_single_model_thread(
     run_id: str,
     task_payload: dict[str, Any],
     spec: CrossModelSpec,
-    prompt: str,
     sandbox_paths: SandboxPaths,
 ) -> dict[str, Any]:
     close_old_connections()
@@ -280,6 +285,12 @@ def _run_single_model_thread(
     thread_id = str(uuid4())
     order = int(spec.order or task_payload.get("model_order", {}).get(spec.model_key, 0) or 0)
     try:
+        child_task = (
+            ResearchTask.objects
+            .select_related("user")
+            .get(pk=child_task_id)
+        )
+        prompt = research_runtime.build_initial_prompt(child_task)
         _mark_model_child_running(child_task_id, run_id, spec, thread_id, prompt)
         _record_cross_step(
             task_id,
@@ -293,25 +304,26 @@ def _run_single_model_thread(
         )
         thread = create_thread(
             _create_model(spec),
-            system_message=research_runtime.build_research_system_message_without_step_approval(),
+            system_message=research_runtime.build_research_system_message_for_user(child_task.user),
             sandbox_paths=sandbox_paths,
             thread_id=thread_id,
-            include_task=False,
-            include_step_approval=False,
+            include_task=True,
+            include_step_approval=True,
         )
         thread.max_turns = _cross_model_max_turns(task_payload.get("search_params"))
-        output_chunks: list[str] = []
-
-        def on_event(event: dict[str, Any]) -> None:
-            _record_cross_event(task_id, run_id, f"model:{spec.model_name}", event)
-
-        for chunk in thread.stream(prompt, on_event=on_event):
-            output_chunks.append(chunk)
+        final_output = _stream_cross_model_thread(
+            thread=thread,
+            prompt=prompt,
+            child_task_id=child_task_id,
+            group_task_id=task_id,
+            run_id=run_id,
+            actor=f"model:{spec.model_name}",
+        )
 
         serialized_history = serialize_history(thread.history)
         state_snapshot = serialize_state(thread.state)
         final_output = resolve_effective_output(
-            "".join(output_chunks).strip(),
+            final_output,
             state=state_snapshot,
             serialized_history=serialized_history,
             create_report=True,
@@ -403,6 +415,55 @@ def _run_single_model_thread(
         }
     finally:
         close_old_connections()
+
+
+def _stream_cross_model_thread(
+    *,
+    thread,
+    prompt: str,
+    child_task_id: int,
+    group_task_id: int,
+    run_id: str,
+    actor: str,
+) -> str:
+    current_prompt = prompt
+    auto_approval_count = 0
+    while True:
+        output_chunks: list[str] = []
+        pending_approval_event: dict[str, Any] | None = None
+
+        def on_event(event: dict[str, Any]) -> None:
+            nonlocal pending_approval_event
+            if research_runtime._is_step_approval_event(event):
+                pending_approval_event = dict(event)
+                return
+            _record_cross_event_for_task(
+                child_task_id,
+                run_id,
+                actor,
+                event,
+                group_task_id=group_task_id,
+            )
+
+        for chunk in thread.stream(current_prompt, on_event=on_event):
+            output_chunks.append(chunk)
+
+        if pending_approval_event is None:
+            return "".join(output_chunks).strip()
+
+        auto_approval_count += 1
+        if auto_approval_count > 20:
+            raise RuntimeError("自动推进审批次数过多，已停止以避免循环")
+        research_runtime._remove_step_approval_tool_message(thread)
+        research_runtime._append_auto_approval_tool_message(
+            thread,
+            pending_approval_event,
+            research_runtime.STEP_APPROVAL_ACCEPTED,
+        )
+        research_runtime._record_auto_step_approval(child_task_id, 1, pending_approval_event)
+        current_prompt = research_runtime._approval_response_prompt(
+            research_runtime.STEP_APPROVAL_ACCEPTED
+        )
 
 
 def _run_integrator_thread(

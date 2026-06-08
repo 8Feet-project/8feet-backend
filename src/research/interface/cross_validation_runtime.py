@@ -11,7 +11,6 @@ from research.interface.cross_validation.prompts import (
     build_cross_validation_base_prompt,
     build_cross_integrator_prompt,
     build_cross_integrator_system_message,
-    build_cross_model_research_prompt,
 )
 from research.interface.cross_validation.types import (
     CROSS_VALIDATION_DEFAULT_WORKERS,
@@ -28,7 +27,6 @@ __all__ = [
     "resolve_cross_model_specs",
     "resolve_integrator_model_spec",
     "build_cross_validation_base_prompt",
-    "build_cross_model_research_prompt",
     "build_cross_integrator_system_message",
     "build_cross_integrator_prompt",
 ]
