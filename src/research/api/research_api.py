@@ -7,6 +7,8 @@ import re
 from typing import Any
 
 from django.http import HttpRequest
+from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 from django.views.decorators.http import require_GET, require_POST
 
 from shared.utils import (
@@ -171,6 +173,39 @@ def _progress_model(task: ResearchTask) -> dict[str, Any]:
     }
 
 
+def _history_model_payload(task: ResearchTask) -> dict:
+    """调研记录使用的大模型信息。llm_config 可能为空 (模型被删除)。"""
+    config = getattr(task, "llm_config", None)
+    if config is None:
+        return {"model_id": "", "model_name": "", "model_provider": ""}
+    return {
+        "model_id": str(config.id),
+        "model_name": config.name or "",
+        "model_provider": config.provider or "",
+    }
+
+
+def _parse_history_time(value, *, end_of_day: bool = False):
+    """解析历史调研筛选用的时间参数，支持纯日期与完整时间戳。"""
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    parsed = parse_datetime(text) if ("T" in text or " " in text) else None
+    if parsed is None:
+        parsed_date = parse_date(text)
+        if parsed_date is None:
+            return None
+        parsed = timezone.datetime.combine(
+            parsed_date,
+            timezone.datetime.max.time() if end_of_day else timezone.datetime.min.time(),
+        )
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
+
+
 def _serialize_history_task(task: ResearchTask) -> dict:
     report = task.reports.filter(is_latest=True).first()
     return {
@@ -180,6 +215,7 @@ def _serialize_history_task(task: ResearchTask) -> dict:
         "report_id": str(report.id) if report else None,
         "status": _frontend_status(task.status),
         "created_at": task.created_at.isoformat(),
+        **_history_model_payload(task),
     }
 
 
@@ -1316,14 +1352,30 @@ def task_list(request: HttpRequest):
 @require_GET
 @jwt_auth(perms=['research.view_research'])
 def research_history_list(request: HttpRequest):
+    """历史调研记录列表查询，支持对象类型/模型/时间区间/关键字组合筛选。
+
+    [route]: GET /api/v1/research/history
+    """
     tasks = ResearchTask.objects.filter(
         user_id=request.user.id,
         parent_task__isnull=True,
-    ).prefetch_related("reports")
+    ).select_related("llm_config").prefetch_related("reports")
     object_type = request.GET.get("object_type")
-    if object_type:
+    if object_type and object_type != "all":
         reverse_map = {"company": "COMPANY", "stock": "STOCK", "commodity": "PRODUCT"}
         tasks = tasks.filter(object_type=reverse_map.get(object_type, object_type))
+    model_id = request.GET.get("model_id")
+    if model_id and str(model_id).isdigit():
+        tasks = tasks.filter(llm_config_id=int(model_id))
+    start_time = _parse_history_time(request.GET.get("start_time") or request.GET.get("start_date"))
+    if start_time:
+        tasks = tasks.filter(created_at__gte=start_time)
+    end_time = _parse_history_time(
+        request.GET.get("end_time") or request.GET.get("end_date"),
+        end_of_day=True,
+    )
+    if end_time:
+        tasks = tasks.filter(created_at__lte=end_time)
     keyword = request.GET.get("keyword")
     if keyword:
         tasks = tasks.filter(object_name__icontains=keyword)
@@ -1343,6 +1395,10 @@ def research_history_list(request: HttpRequest):
 @require_GET
 @jwt_auth(perms=['research.view_research'])
 def research_history_detail(request: HttpRequest, task_id: int):
+    """历史调研记录详情查询。
+
+    [route]: GET /api/v1/research/history/{task_id}
+    """
     task = _get_user_task(task_id, request.user.id)
     if not task:
         return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
@@ -1356,7 +1412,38 @@ def research_history_detail(request: HttpRequest, task_id: int):
         "report_id": str(report.id) if report else None,
         "status": _frontend_status(task.status),
         "created_at": task.created_at.isoformat(),
+        **_history_model_payload(task),
     })
+
+
+@response_wrapper
+@require_POST
+@jwt_auth(perms=['research.view_research'])
+def research_history_reload(request: HttpRequest, task_id: int):
+    """重载历史调研结果：返回报告ID与前端复现地址。
+
+    用于"历史调研记录"页点击单条记录后，重新加载并展示当时抓取的
+    信息源、分析结果与完整调研报告。
+
+    [route]: POST /api/v1/research/history/{task_id}/reload
+    """
+    task = _get_user_task(task_id, request.user.id)
+    if not task:
+        return failed_api_response(ErrorCode.ITEM_NOT_FOUND, "任务不存在")
+    report = task.reports.filter(is_latest=True).first()
+    report_id = str(report.id) if report else ""
+    # 仅在任务已完成且存在报告时复现报告页，否则回到调研流程页查看分析过程
+    if report_id and task.status == "COMPLETED":
+        redirect_url = f"/report?report_id={report_id}"
+    else:
+        redirect_url = f"/process?task_id={task.id}"
+    return success_api_response({
+        "task_id": str(task.id),
+        "report_id": report_id,
+        "redirect_url": redirect_url,
+        "fact_dataset": f"task-{task.id}",
+    })
+
 
 @response_wrapper
 @require_POST

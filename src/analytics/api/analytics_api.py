@@ -15,7 +15,7 @@ from shared.utils import (
 )
 from analytics.interface.analytics_interface import (
     get_dashboard_stats, add_favorite,
-    list_favorites, create_alert, list_alerts,
+    list_favorites, remove_favorites_batch, create_alert, list_alerts,
     get_cost_report, trigger_alert_now, following_run_after
 )
 
@@ -73,8 +73,11 @@ def _normalize_object_type(value: str) -> str:
 
 def _backend_favorite_type(value: str) -> str:
     mapping = {
+        "info": "INFO",
+        "insight": "INFO",
         "report": "REPORT",
         "model": "MODEL",
+        "INFO": "INFO",
         "REPORT": "REPORT",
         "MODEL": "MODEL",
     }
@@ -93,11 +96,13 @@ def _backend_object_type(value: str) -> str:
 
 def _serialize_favorite(item: dict) -> dict:
     item_type = (item.get("item_type") or "").lower()
+    created_at = item.get("created_at")
     return {
         "favorite_id": str(item.get("id")),
         "favorite_type": item_type,
         "target_id": str(item.get("item_id")),
         "remark": item.get("remark") or "",
+        "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or ""),
     }
 
 
@@ -246,8 +251,8 @@ def favorite_add(request: HttpRequest):
     item_id = data.get('target_id')     # 对齐文档参数名
     remark = str(data.get('remark') or '').strip()
 
-    if item_type not in {"REPORT", "MODEL"}:
-        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "favorite_type 仅支持 report 或 model")
+    if item_type not in {"INFO", "REPORT", "MODEL"}:
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "favorite_type 仅支持 info、report 或 model")
 
     if not item_id:
         return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "缺少必要参数")
@@ -278,6 +283,27 @@ def favorite_remove(request: HttpRequest, favorite_id: int):
     if favorite:
         favorite.delete()
     return success_api_response({"result": "success", "target_id": str(target_id)})
+
+
+@response_wrapper
+@require_POST
+@jwt_auth()
+def favorite_batch_remove(request: HttpRequest):
+    """批量取消收藏
+    [route]: POST /api/v1/favorites/items/batch-delete
+    """
+    data = _request_data(request)
+    favorite_ids = data.get('favorite_ids')
+    if favorite_ids is None:
+        favorite_ids = data.get('ids')
+    if not isinstance(favorite_ids, list) or not favorite_ids:
+        return failed_api_response(ErrorCode.INVALID_REQUEST_ARGUMENT_ERROR, "favorite_ids 不能为空")
+    deleted_count, target_ids = remove_favorites_batch(request.user.id, favorite_ids)
+    return success_api_response({
+        "result": "success",
+        "deleted_count": deleted_count,
+        "target_ids": target_ids,
+    })
 
 
 @response_wrapper

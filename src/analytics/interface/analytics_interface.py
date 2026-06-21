@@ -162,12 +162,26 @@ def remove_favorite(user_id: int, item_type: str, item_id: str) -> bool:
     return deleted > 0
 
 
+def remove_favorites_batch(user_id: int, favorite_ids: List) -> Tuple[int, List[str]]:
+    """批量取消收藏，返回 (删除数量, 被删除项的目标资源ID列表)。
+
+    仅删除归属当前用户的收藏项，避免越权删除。
+    """
+    normalized_ids = [str(fid).strip() for fid in (favorite_ids or []) if str(fid).strip().isdigit()]
+    if not normalized_ids:
+        return 0, []
+    query = Favorite.objects.filter(user_id=user_id, pk__in=[int(fid) for fid in normalized_ids])
+    target_ids = [str(item_id) for item_id in query.values_list('item_id', flat=True)]
+    deleted, _ = query.delete()
+    return deleted, target_ids
+
+
 def list_favorites(user_id: int, item_type: str = None) -> List[dict]:
-    """获取收藏列表"""
-    query = Favorite.objects.filter(user_id=user_id).exclude(item_type='INFO')
+    """获取收藏列表（含 调研信息 INFO / 报告 REPORT / 大模型 MODEL 三类）"""
+    query = Favorite.objects.filter(user_id=user_id)
     if item_type:
         query = query.filter(item_type=item_type)
-    return list(query.values('id', 'item_type', 'item_id', 'remark', 'created_at'))
+    return list(query.order_by('-created_at').values('id', 'item_type', 'item_id', 'remark', 'created_at'))
 
 
 SCHEDULE_DAILY = 'daily'

@@ -13,8 +13,10 @@ class Favorite(models.Model):
     """收藏记录
 
     FR-GRXX-0002: 用户可收藏调研信息、报告和常用大模型。
+    FR-GRXX-0003: 收藏夹分类管理 —— 按 调研信息/调研报告/大模型 三类集中查看与管理。
     """
     ITEM_TYPE_CHOICES = [
+        ('INFO', '调研信息'),
         ('REPORT', '调研报告'),
         ('MODEL', '大模型'),
     ]
