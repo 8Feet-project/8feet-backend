@@ -124,12 +124,13 @@ class FavoriteRemarkApiTests(TestCase):
         self.assertEqual(list_payload["data"]["total"], 1)
         self.assertEqual(list_payload["data"]["list"][0]["remark"], "666")
 
-    def test_list_hides_legacy_info_favorites(self):
+    def test_list_includes_info_favorites(self):
+        # FR-GRXX-0003：调研信息(INFO) 现为正式收藏类别，应与报告/模型一并展示
         Favorite.objects.create(
             user=self.user,
             item_type="INFO",
-            item_id="insight-legacy-001",
-            remark="legacy insight",
+            item_id="insight-001",
+            remark="调研信息",
         )
         Favorite.objects.create(
             user=self.user,
@@ -146,8 +147,20 @@ class FavoriteRemarkApiTests(TestCase):
         self.assertEqual(list_response.status_code, 200)
         list_payload = list_response.json()
         self.assertEqual(list_payload["code"], 0)
-        self.assertEqual(list_payload["data"]["total"], 1)
-        self.assertEqual(list_payload["data"]["list"][0]["favorite_type"], "report")
+        self.assertEqual(list_payload["data"]["total"], 2)
+        types = {item["favorite_type"] for item in list_payload["data"]["list"]}
+        self.assertEqual(types, {"info", "report"})
+
+        info_response = self.client.get(
+            "/api/v1/favorites/items/",
+            data={"favorite_type": "info"},
+            secure=True,
+        )
+        info_payload = info_response.json()
+        self.assertEqual(info_payload["code"], 0)
+        self.assertEqual(info_payload["data"]["total"], 1)
+        self.assertEqual(info_payload["data"]["list"][0]["favorite_type"], "info")
+        self.assertTrue(info_payload["data"]["list"][0]["created_at"])
 
 
 class AlertScheduleTests(TestCase):
